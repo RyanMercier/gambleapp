@@ -1,77 +1,104 @@
-const { Room } = require("colyseus");
-const { Schema, MapSchema } = require("@colyseus/schema");
+const { BaseGameRoom, BasePlayer, BaseGameState } = require("./BaseGameRoom");
 
-class Player extends Schema {
+class BalancePlayer extends BasePlayer {
   constructor() {
     super();
     this.x = 400;
-    this.y = 300;
-    this.alive = true;
+    this.y = 500; // Balance game specific starting position
   }
 }
-Player.schema = {
-  x: "number",
-  y: "number",
-  alive: "boolean"
+BalancePlayer.schema = {
+  ...BasePlayer.schema
 };
 
-class State extends Schema {
+class BalanceRoom extends BaseGameRoom {
   constructor() {
     super();
-    this.players = new MapSchema();
-  }
-}
-State.schema = {
-  players: { map: Player }
-};
-
-class BalanceRoom extends Room {
-  maxClients = 8;
-
-  onCreate() {
-    this.setState(new State());
-
+    this.minPlayers = 2;
+    this.maxClients = 8;
     this.plateCount = 0;
+    this.plateSpawnInterval = null;
+  }
 
-    this.setSimulationInterval(() => {
-      const id = `plate_${this.plateCount++}`;
-      const x = Math.floor(Math.random() * 700) + 50;
-      this.broadcast("spawn_plate", { id, x });
-    }, 5000);
-
-    this.onMessage("update", (client, data) => {
-      const player = this.state.players.get(client.sessionId);
-      if (player) {
-        player.x = data.x;
-        player.y = data.y;
-      }
-    });
-
+  initializeGame() {
+    console.log("Initializing Balance Game");
+    // Balance game specific initialization
+    this.plateCount = 0;
+    
+    // Handle death messages
     this.onMessage("dead", (client) => {
       const player = this.state.players.get(client.sessionId);
-      if (player) {
+      if (player && this.state.gameStarted) {
         player.alive = false;
+        console.log(`Player ${client.sessionId} died`);
+        this.checkGameEnd();
       }
-      this.checkWinner();
     });
   }
 
-  onJoin(client) {
-    const player = new Player();
-    this.state.players.set(client.sessionId, player);
-    console.log(`Player ${client.sessionId} joined.`);
+  createPlayer() {
+    return new BalancePlayer();
   }
 
-  onLeave(client) {
-    this.state.players.delete(client.sessionId);
-    this.checkWinner();
+  getWelcomeMessage() {
+    return "Welcome to Balance Game! Keep your stick balanced while avoiding falling plates. Click 'Ready' when you're ready to play.";
   }
 
-  checkWinner() {
-    const alive = Array.from(this.state.players.values()).filter(p => p.alive);
-    if (alive.length === 1) {
-      console.log(`Winner:`, alive[0]);
-      this.broadcast("winner", { winner: true });
+  getGameRules() {
+    return [
+      "Move your mouse to control the balance stick",
+      "Avoid letting plates fall on you",
+      "Don't let your stick fall off the screen",
+      "Last player standing wins!"
+    ];
+  }
+
+  resetPlayerPosition(player) {
+    player.x = 400;
+    player.y = 500;
+  }
+
+  handlePlayerUpdate(client, data) {
+    const player = this.state.players.get(client.sessionId);
+    if (player && player.alive) {
+      player.x = data.x;
+      player.y = data.y;
+    }
+  }
+
+  onGameStart() {
+    console.log("Balance game started - spawning plates");
+    // Start spawning plates every 5 seconds
+    this.plateSpawnInterval = setInterval(() => {
+      const id = `plate_${this.plateCount++}`;
+      const x = Math.floor(Math.random() * 700) + 50;
+      console.log(`Spawning plate at x: ${x}`);
+      this.broadcast("spawn_plate", { id, x });
+    }, 5000);
+  }
+
+  onGameEnd(winner) {
+    console.log("Balance game ended");
+    // Clean up plate spawning
+    if (this.plateSpawnInterval) {
+      clearInterval(this.plateSpawnInterval);
+      this.plateSpawnInterval = null;
+    }
+  }
+
+  onGameReset() {
+    console.log("Balance game reset");
+    // Reset plate counter
+    this.plateCount = 0;
+    if (this.plateSpawnInterval) {
+      clearInterval(this.plateSpawnInterval);
+      this.plateSpawnInterval = null;
+    }
+  }
+
+  onGameDispose() {
+    if (this.plateSpawnInterval) {
+      clearInterval(this.plateSpawnInterval);
     }
   }
 }
