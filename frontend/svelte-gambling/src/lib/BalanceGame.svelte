@@ -147,7 +147,6 @@
           
           // Visual representation of player's stick
           const stickSprite = scene.add.rectangle(400, 500, 20, 120, 0x4A5568);
-          stickSprite.setStroke(0x718096, 2);
 
           const plates = [];
           const otherPlayers = {};
@@ -185,7 +184,6 @@
               });
               
               const plateSprite = scene.add.rectangle(data.x, 0, 80, 10, 0x8B4513);
-              plateSprite.setStroke(0xA0522D, 2);
               
               plates.push({ body: plate, sprite: plateSprite });
             }
@@ -212,7 +210,6 @@
                   
                   const otherStickSprite = scene.add.rectangle(player.x, player.y, 20, 120, 0x999999);
                   otherStickSprite.setAlpha(0.6);
-                  otherStickSprite.setStroke(0xBBBBBB, 2);
                   
                   otherPlayers[sessionId] = otherStickSprite;
 
@@ -245,7 +242,6 @@
                     
                     const otherStickSprite = scene.add.rectangle(player.x, player.y, 20, 120, 0x999999);
                     otherStickSprite.setAlpha(0.6);
-                    otherStickSprite.setStroke(0xBBBBBB, 2);
                     
                     otherPlayers[sessionId] = otherStickSprite;
 
