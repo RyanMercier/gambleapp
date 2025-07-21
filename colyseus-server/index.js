@@ -1,6 +1,7 @@
 const http = require("http");
 const express = require("express");
 const { Server } = require("colyseus");
+const { matchMaker } = require("colyseus");
 const { WebSocketTransport } = require("@colyseus/ws-transport");
 const { Room } = require("colyseus");
 const { Schema, MapSchema, type } = require("@colyseus/schema");
@@ -58,6 +59,80 @@ class GameLobbyRoom extends Room {
       minPlayers: this.state.minPlayers,
       playersSize: this.state.players.size
     });
+
+    // Set up message handlers immediately after state initialization
+    this.setupMessageHandlers();
+  }
+
+  setupMessageHandlers() {
+    console.log("Setting up message handlers for lobby");
+
+    this.onMessage("toggle_ready", (client) => {
+      console.log(`Received toggle_ready from client ${client.sessionId}`);
+      
+      const player = this.state.players.get(client.sessionId);
+      if (!player) {
+        console.log(`Player not found for session ${client.sessionId}`);
+        return;
+      }
+      
+      const wasReady = player.ready;
+      player.ready = !player.ready;
+      console.log(`Player ${player.username} toggled ready: ${wasReady} -> ${player.ready}`);
+      
+      // Broadcast ready state change
+      this.broadcast("player_ready_changed", {
+        sessionId: client.sessionId,
+        username: player.username,
+        ready: player.ready
+      });
+      
+      this.checkGameStart();
+    });
+
+    this.onMessage("chat_message", (client, message) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player) {
+        console.log(`Player not found for chat message from ${client.sessionId}`);
+        return;
+      }
+
+      if (message && message.text) {
+        console.log(`Chat message from ${player.username}: ${message.text}`);
+        this.broadcast("chat_message", {
+          username: player.username,
+          message: message.text,
+          timestamp: Date.now()
+        });
+      } else {
+        console.log(`Invalid chat message from ${player.username}:`, message);
+      }
+    });
+
+    this.onMessage("ready", (client) => {
+      // Alternative ready message handler for compatibility
+      console.log(`Received ready message from client ${client.sessionId}`);
+      
+      const player = this.state.players.get(client.sessionId);
+      if (!player) {
+        console.log(`Player not found for session ${client.sessionId}`);
+        return;
+      }
+      
+      const wasReady = player.ready;
+      player.ready = !player.ready;
+      console.log(`Player ${player.username} toggled ready: ${wasReady} -> ${player.ready}`);
+      
+      this.broadcast("player_ready_changed", {
+        sessionId: client.sessionId,
+        username: player.username,
+        ready: player.ready
+      });
+      
+      this.checkGameStart();
+    });
+
+    console.log("Message handlers set up successfully");
   }
   
   onJoin(client, options) {
@@ -96,49 +171,10 @@ class GameLobbyRoom extends Room {
     });
   }
   
-  onMessage(client, type, message) {
-    console.log(`Received message: ${type} from client ${client.sessionId}`);
-    
-    const player = this.state.players.get(client.sessionId);
-    if (!player) {
-      console.log(`Player not found for session ${client.sessionId}`);
-      console.log(`Available players:`, Array.from(this.state.players.keys()));
-      return;
-    }
-    
-    switch(type) {
-      case "toggle_ready":
-        const wasReady = player.ready;
-        player.ready = !player.ready;
-        console.log(`Player ${player.username} toggled ready: ${wasReady} -> ${player.ready}`);
-        
-        // Broadcast ready state change
-        this.broadcast("player_ready_changed", {
-          sessionId: client.sessionId,
-          username: player.username,
-          ready: player.ready
-        });
-        
-        this.checkGameStart();
-        break;
-        
-      case "chat_message":
-        if (message && message.text) {
-          console.log(`Chat message from ${player.username}: ${message.text}`);
-          this.broadcast("chat_message", {
-            username: player.username,
-            message: message.text,
-            timestamp: Date.now()
-          });
-        } else {
-          console.log(`Invalid chat message from ${player.username}:`, message);
-        }
-        break;
-        
-      default:
-        console.log(`Unknown message type: ${type} from ${player.username}`);
-        break;
-    }
+  onMessage(type, callback) {
+    // Override to add logging
+    console.log(`Registering message handler for: ${type}`);
+    return super.onMessage(type, callback);
   }
   
   onLeave(client) {
@@ -207,7 +243,7 @@ class GameLobbyRoom extends Room {
     
     // Create actual game room
     try {
-      const gameRoom = await this.presence.create(this.state.gameType, {
+      const gameRoom = await matchMaker.createRoom(this.state.gameType, {
         players: Array.from(this.state.players.entries()).map(([sessionId, player]) => ({
           sessionId,
           username: player.username
