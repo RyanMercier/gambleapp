@@ -3,7 +3,7 @@ const express = require("express");
 const { Server } = require("colyseus");
 const { WebSocketTransport } = require("@colyseus/ws-transport");
 const { Room } = require("colyseus");
-const { Schema, MapSchema } = require("@colyseus/schema");
+const { Schema, MapSchema, type } = require("@colyseus/schema");
 
 const app = express();
 const server = http.createServer(app);
@@ -19,87 +19,124 @@ const gameServer = new Server({
 // Import game rooms
 const BalanceRoom = require("./rooms/BalanceRoom");
 
-// Lobby schemas
-class LobbyPlayer extends Schema {
-  constructor() {
-    super();
-    this.username = "";
-    this.ready = false;
-    this.joinedAt = Date.now();
-  }
-}
-LobbyPlayer.schema = {
-  username: "string",
-  ready: "boolean",
-  joinedAt: "number"
-};
+// Lobby schemas using decorators
+class LobbyPlayer extends Schema {}
+type("string")(LobbyPlayer.prototype, "username");
+type("boolean")(LobbyPlayer.prototype, "ready");
+type("number")(LobbyPlayer.prototype, "joinedAt");
 
-class LobbyState extends Schema {
-  constructor() {
-    super();
-    this.players = new MapSchema();
-    this.gameType = "";
-    this.maxPlayers = 8;
-    this.minPlayers = 2;
-    this.gameStarting = false;
-    this.countdown = 0;
-  }
-}
-LobbyState.schema = {
-  players: { map: LobbyPlayer },
-  gameType: "string",
-  maxPlayers: "number",
-  minPlayers: "number",
-  gameStarting: "boolean",
-  countdown: "number"
-};
+class LobbyState extends Schema {}
+type({ map: LobbyPlayer })(LobbyState.prototype, "players");
+type("string")(LobbyState.prototype, "gameType");
+type("number")(LobbyState.prototype, "maxPlayers");
+type("number")(LobbyState.prototype, "minPlayers");
+type("boolean")(LobbyState.prototype, "gameStarting");
+type("number")(LobbyState.prototype, "countdown");
 
 // Game Lobby Room
 class GameLobbyRoom extends Room {
   onCreate(options) {
+    console.log("Creating lobby with options:", options);
+    
+    // Initialize state first
     this.setState(new LobbyState());
+    
+    // Initialize all properties with defaults
+    this.state.players = new MapSchema();
     this.state.gameType = options.gameType || "balance";
     this.state.maxPlayers = options.maxPlayers || 8;
     this.state.minPlayers = options.minPlayers || 2;
+    this.state.gameStarting = false;
+    this.state.countdown = 0;
     
     this.countdownTimer = null;
     this.maxClients = this.state.maxPlayers;
     
-    console.log(`${this.state.gameType} lobby created`);
+    console.log(`${this.state.gameType} lobby created with state:`, {
+      gameType: this.state.gameType,
+      maxPlayers: this.state.maxPlayers,
+      minPlayers: this.state.minPlayers,
+      playersSize: this.state.players.size
+    });
   }
   
   onJoin(client, options) {
-    console.log(`Player ${client.sessionId} joined ${this.state.gameType} lobby`);
+    console.log(`Player ${client.sessionId} joined ${this.state.gameType} lobby with options:`, options);
     
     const player = new LobbyPlayer();
     player.username = options.username || `Player${client.sessionId.slice(0, 4)}`;
+    player.ready = false;
+    player.joinedAt = Date.now();
+    
+    // Add player to state
     this.state.players.set(client.sessionId, player);
     
-    // Send lobby info
+    console.log(`Player ${player.username} added to lobby. Total players: ${this.state.players.size}`);
+    
+    // Force state synchronization
+    this.broadcast("player_joined", {
+      sessionId: client.sessionId,
+      username: player.username,
+      totalPlayers: this.state.players.size
+    });
+    
+    // Send lobby info to the joining player
     client.send("lobby_info", {
       gameType: this.state.gameType,
       maxPlayers: this.state.maxPlayers,
       minPlayers: this.state.minPlayers
     });
+    
+    // Debug: Log current state
+    console.log("Current lobby state after join:", {
+      playersCount: this.state.players.size,
+      gameType: this.state.gameType,
+      gameStarting: this.state.gameStarting,
+      playersKeys: Array.from(this.state.players.keys())
+    });
   }
   
   onMessage(client, type, message) {
+    console.log(`Received message: ${type} from client ${client.sessionId}`);
+    
     const player = this.state.players.get(client.sessionId);
-    if (!player) return;
+    if (!player) {
+      console.log(`Player not found for session ${client.sessionId}`);
+      console.log(`Available players:`, Array.from(this.state.players.keys()));
+      return;
+    }
     
     switch(type) {
       case "toggle_ready":
+        const wasReady = player.ready;
         player.ready = !player.ready;
-        console.log(`Player ${player.username} is now ${player.ready ? 'ready' : 'not ready'}`);
+        console.log(`Player ${player.username} toggled ready: ${wasReady} -> ${player.ready}`);
+        
+        // Broadcast ready state change
+        this.broadcast("player_ready_changed", {
+          sessionId: client.sessionId,
+          username: player.username,
+          ready: player.ready
+        });
+        
         this.checkGameStart();
         break;
         
       case "chat_message":
-        this.broadcast("chat_message", {
-          username: player.username,
-          message: message.text,
-          timestamp: Date.now()
-        });
+        if (message && message.text) {
+          console.log(`Chat message from ${player.username}: ${message.text}`);
+          this.broadcast("chat_message", {
+            username: player.username,
+            message: message.text,
+            timestamp: Date.now()
+          });
+        } else {
+          console.log(`Invalid chat message from ${player.username}:`, message);
+        }
+        break;
+        
+      default:
+        console.log(`Unknown message type: ${type} from ${player.username}`);
         break;
     }
   }

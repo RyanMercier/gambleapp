@@ -95,6 +95,24 @@
       console.log("📋 Lobby info:", data);
     });
     
+    // Handle player joined message
+    lobbyRoom.onMessage("player_joined", (data) => {
+      console.log("👤 Player joined:", data);
+      // Force refresh of current state
+      if (lobbyRoom.state) {
+        updateFromState(lobbyRoom.state);
+      }
+    });
+    
+    // Handle player ready state change
+    lobbyRoom.onMessage("player_ready_changed", (data) => {
+      console.log("🎯 Player ready changed:", data);
+      // Force refresh of current state
+      if (lobbyRoom.state) {
+        updateFromState(lobbyRoom.state);
+      }
+    });
+    
     // Handle game starting countdown
     lobbyRoom.onMessage("game_starting", (data) => {
       gameStarting = true;
@@ -142,24 +160,135 @@
       }, 10);
     });
     
+    // Handle room errors
+    lobbyRoom.onError((code, message) => {
+      console.error("Room error:", code, message);
+      error = `Room error: ${message}`;
+    });
+    
+    // Handle initial lobby state
+    lobbyRoom.onStateChange.once((state) => {
+      console.log("📊 Initial state received");
+      console.log("Raw state object:", state);
+      console.log("State players:", state.players);
+      console.log("State players size:", state.players?.size);
+      console.log("Direct state access test:");
+      console.log("  state.gameType:", state.gameType);
+      console.log("  state.maxPlayers:", state.maxPlayers);
+      console.log("  state.minPlayers:", state.minPlayers);
+      console.log("  state.gameStarting:", state.gameStarting);
+      
+      updateFromState(state);
+      
+      // Set up player change listeners
+      if (state.players) {
+        state.players.onAdd = (player, sessionId) => {
+          console.log(`Player added: ${sessionId} - ${player.username}`);
+          updateFromState(state);
+        };
+        
+        state.players.onRemove = (player, sessionId) => {
+          console.log(`Player removed: ${sessionId}`);
+          updateFromState(state);
+        };
+      }
+    });
+
     // Handle lobby state changes
     lobbyRoom.onStateChange((state) => {
-      players = Array.from(state.players.entries()).map(([sessionId, player]) => ({
-        sessionId,
-        username: player.username,
-        ready: player.ready,
-        joinedAt: player.joinedAt,
-        isOwn: sessionId === lobbyRoom.sessionId
-      }));
-      
-      // Find own player
-      ownPlayer = players.find(p => p.isOwn) || null;
-      
-      gameStarting = state.gameStarting;
-      countdown = state.countdown;
-      
-      console.log(`👥 Lobby updated: ${players.length} players, ${players.filter(p => p.ready).length} ready`);
+      console.log("State changed, updating...");
+      updateFromState(state);
     });
+  }
+  
+  function updateFromState(state) {
+    // Safely handle state updates
+    console.log("Updating from state:", state);
+    
+    if (!state) {
+      console.warn("Received empty state");
+      return;
+    }
+    
+    // Test direct property access
+    console.log("Direct state property access:");
+    console.log("  gameType:", state.gameType);
+    console.log("  maxPlayers:", state.maxPlayers);
+    console.log("  minPlayers:", state.minPlayers);
+    console.log("  gameStarting:", state.gameStarting);
+    console.log("  countdown:", state.countdown);
+    console.log("  players:", state.players);
+    
+    // Update game state first (these should work)
+    gameStarting = state.gameStarting || false;
+    countdown = state.countdown || 0;
+    
+    // Update players array safely
+    if (state.players) {
+      try {
+        console.log("Processing players state:", state.players);
+        console.log("Players size:", state.players.size);
+        console.log("Players type:", typeof state.players);
+        console.log("Players constructor:", state.players.constructor?.name);
+        
+        // For Colyseus MapSchema, we need to use forEach or direct access
+        let playersData = [];
+        
+        if (typeof state.players.forEach === 'function') {
+          // Use forEach to iterate over MapSchema
+          console.log("Using forEach method");
+          state.players.forEach((player, sessionId) => {
+            console.log(`Found player: ${sessionId} -> ${player.username}`);
+            playersData.push([sessionId, player]);
+          });
+        } else if (typeof state.players.entries === 'function') {
+          // Fallback to entries method
+          console.log("Using entries method");
+          playersData = Array.from(state.players.entries());
+        } else if (state.players.size !== undefined) {
+          // Try to access via keys if it has size
+          console.log("Trying manual iteration with size:", state.players.size);
+          for (let i = 0; i < state.players.size; i++) {
+            // This might not work, but worth trying
+            console.log("Index", i, ":", state.players[i]);
+          }
+        } else {
+          // Last resort: treat as object
+          console.log("Treating as plain object");
+          playersData = Object.entries(state.players);
+        }
+          
+        console.log("Players data extracted:", playersData);
+          
+        players = playersData.map(([sessionId, player]) => ({
+          sessionId,
+          username: player.username || `Player${sessionId.slice(0, 4)}`,
+          ready: player.ready || false,
+          joinedAt: player.joinedAt || Date.now(),
+          isOwn: sessionId === lobbyRoom.sessionId
+        }));
+        
+        // Find own player
+        ownPlayer = players.find(p => p.isOwn) || null;
+        
+        console.log("Processed players:", players);
+        console.log("Own player:", ownPlayer);
+        
+      } catch (err) {
+        console.error("Error processing players state:", err);
+        console.error("State.players type:", typeof state.players);
+        console.error("State.players constructor:", state.players?.constructor?.name);
+        console.error("Full error:", err);
+        players = [];
+        ownPlayer = null;
+      }
+    } else {
+      console.log("No players in state");
+      console.log("Available state properties:", Object.keys(state));
+      console.log("State prototype:", Object.getPrototypeOf(state));
+    }
+    
+    console.log(`👥 Lobby updated: ${players.length} players, ${players.filter(p => p.ready).length} ready`);
   }
   
   async function joinGame(roomId) {
@@ -194,17 +323,25 @@
   }
   
   function toggleReady() {
-    if (lobbyRoom && !gameStarting && ownPlayer) {
-      lobbyRoom.send("toggle_ready");
-      console.log(`🎯 ${ownPlayer.ready ? 'Unreadying' : 'Readying'} up...`);
+    if (lobbyRoom && !gameStarting && !connecting) {
+      try {
+        lobbyRoom.send("toggle_ready");
+        console.log(`🎯 ${ownPlayer?.ready ? 'Unreadying' : 'Readying'} up...`);
+      } catch (err) {
+        console.error("Error sending ready toggle:", err);
+      }
     }
   }
   
   function sendChatMessage() {
     const message = newMessage.trim();
-    if (message && lobbyRoom) {
-      lobbyRoom.send("chat_message", { text: message });
-      newMessage = "";
+    if (message && lobbyRoom && !connecting) {
+      try {
+        lobbyRoom.send("chat_message", { text: message });
+        newMessage = "";
+      } catch (err) {
+        console.error("Error sending chat message:", err);
+      }
     }
   }
   
@@ -408,12 +545,12 @@
               class="input flex-1"
               bind:value={newMessage}
               on:keydown={handleKeyPress}
-              disabled={!lobbyRoom || gameStarting}
+              disabled={!lobbyRoom || gameStarting || connecting}
             />
             <button 
               class="btn btn-primary px-6"
               on:click={sendChatMessage}
-              disabled={!newMessage.trim() || !lobbyRoom || gameStarting}
+              disabled={!newMessage.trim() || !lobbyRoom || gameStarting || connecting}
             >
               Send
             </button>
