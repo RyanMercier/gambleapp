@@ -1,17 +1,10 @@
 <script>
-  import SimpleLobby from "$lib/SimpleLobby.svelte";
+  import GameSelection from "$lib/GameSelection.svelte";
 </script>
 
 <svelte:head>
   <title>Play Games - Gamble Royale</title>
+  <meta name="description" content="Choose from our collection of skill-based multiplayer games" />
 </svelte:head>
 
-<SimpleLobby />
-
-<style>
-  :global(body) {
-    margin: 0;
-    padding: 0;
-    overflow-x: hidden;
-  }
-</style>
+<GameSelection />

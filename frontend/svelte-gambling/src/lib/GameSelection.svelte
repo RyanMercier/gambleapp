@@ -1,359 +1,146 @@
 <script>
   import { onMount } from "svelte";
-  import BalanceGame from "./BalanceGame.svelte";
+  import GameLobby from "./GameLobby.svelte";
   
   let selectedGame = null;
-  let availableGames = [];
-  let client = null;
-  let lobbyRoom = null;
-  let gameRoom = null;
   let connecting = false;
   let error = null;
 
   const gameInfo = {
     balance: {
       name: "Balance Game",
-      description: "Keep your stick balanced while avoiding falling plates",
-      image: "🎯",
-      players: "2-8 players",
-      difficulty: "Medium"
-    },
-    race: {
-      name: "Race Game", 
-      description: "Navigate through obstacles to reach the finish line first",
-      image: "🏁",
-      players: "2-6 players",
-      difficulty: "Easy"
+      description: "Keep your stick balanced while avoiding falling plates. Last player standing wins!",
+      icon: "🎯",
+      minPlayers: 2,
+      maxPlayers: 8,
+      difficulty: "Medium",
+      estimatedTime: "3-5 minutes"
     }
+    // Future games can be added here
   };
 
-  onMount(async () => {
-    try {
-      const Colyseus = await import("colyseus.js");
-      client = new Colyseus.Client("ws://localhost:2567");
-      
-      // Connect to lobby to get available games
-      lobbyRoom = await client.joinOrCreate("lobby");
-      
-      lobbyRoom.onMessage("available_games", (data) => {
-        availableGames = data.games;
-        console.log("Available games:", availableGames);
-      });
+  // Available games (no server connection needed)
+  const availableGames = Object.keys(gameInfo);
 
-      lobbyRoom.onMessage("redirect_to_game", (data) => {
-        console.log("Redirecting to game:", data.gameType);
-        joinGame(data.gameType);
-      });
-
-    } catch (err) {
-      console.error("Failed to connect to lobby:", err);
-      error = "Failed to connect to server. Please check if the server is running.";
-    }
-  });
-
-  async function selectGame(gameType) {
+  function selectGame(gameType) {
     if (connecting) return;
-    
-    connecting = true;
-    error = null;
-    
-    try {
-      console.log("Selecting game:", gameType);
-      
-      // Leave lobby room
-      if (lobbyRoom) {
-        lobbyRoom.leave();
-        lobbyRoom = null;
-      }
-      
-      // Join the selected game directly
-      await joinGame(gameType);
-      
-    } catch (err) {
-      console.error("Failed to select game:", err);
-      error = `Failed to join ${gameType} game. Please try again.`;
-      connecting = false;
-    }
+    console.log(`🎮 Selected game: ${gameType}`);
+    selectedGame = gameType;
   }
 
-  async function joinGame(gameType) {
-    try {
-      console.log("Joining game:", gameType);
-      gameRoom = await client.joinOrCreate(gameType);
-      selectedGame = gameType;
-      connecting = false;
-      
-      console.log("Successfully joined game:", gameType);
-      
-    } catch (err) {
-      console.error("Failed to join game:", err);
-      error = `Failed to join ${gameType} game. Please try again.`;
-      connecting = false;
-      selectedGame = null;
-    }
-  }
-
-  function backToLobby() {
-    if (gameRoom) {
-      gameRoom.leave();
-      gameRoom = null;
-    }
+  function backToSelection() {
+    console.log("🔙 Back to game selection");
     selectedGame = null;
-    
-    // Reconnect to lobby
-    if (client) {
-      client.joinOrCreate("lobby").then(room => {
-        lobbyRoom = room;
-        
-        lobbyRoom.onMessage("available_games", (data) => {
-          availableGames = data.games;
-        });
-      });
-    }
+    error = null;
   }
 </script>
 
-{#if error}
-  <div class="error-message">
-    <h3>Connection Error</h3>
-    <p>{error}</p>
-    <button on:click={() => location.reload()} class="retry-button">
-      Retry Connection
-    </button>
-  </div>
-{:else if selectedGame === "balance"}
-  <BalanceGame {gameRoom} onBack={backToLobby} />
-{:else if selectedGame === "race"}
-  <div class="coming-soon">
-    <h2>Race Game - Coming Soon!</h2>
-    <button on:click={backToLobby} class="back-button">Back to Lobby</button>
-  </div>
+{#if selectedGame}
+  <GameLobby gameType={selectedGame} onBack={backToSelection} />
 {:else}
-  <!-- Game Selection Lobby -->
-  <div class="lobby-container">
-    <div class="lobby-header">
-      <h1>🎮 Game Lobby</h1>
-      <p>Choose a game to play with other players</p>
-    </div>
-
-    {#if connecting}
-      <div class="connecting">
-        <div class="spinner"></div>
-        <p>Connecting to game...</p>
+  <!-- Game Selection Menu -->
+  <div class="min-h-screen game-container">
+    <div class="max-w-6xl mx-auto p-6">
+      <!-- Header -->
+      <div class="text-center mb-12">
+        <h1 class="text-4xl font-bold mb-4 bg-gradient-to-r from-purple-400 to-blue-500 bg-clip-text text-transparent">
+          🎮 Choose Your Game
+        </h1>
+        <p class="text-xl text-gray-300 max-w-2xl mx-auto">
+          Select a game to join and compete with players from around the world
+        </p>
       </div>
-    {:else if availableGames.length > 0}
-      <div class="games-grid">
+
+      {#if error}
+        <div class="card bg-red-500/10 border-red-500/20 text-center mb-8">
+          <h3 class="text-red-400 font-semibold mb-2">Error</h3>
+          <p class="text-gray-300 mb-4">{error}</p>
+          <button class="btn btn-primary" on:click={() => error = null}>
+            Try Again
+          </button>
+        </div>
+      {/if}
+
+      <!-- Game Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
         {#each availableGames as gameType}
-          {#if gameInfo[gameType]}
-            <div class="game-card" on:click={() => selectGame(gameType)}>
-              <div class="game-icon">{gameInfo[gameType].image}</div>
-              <h3>{gameInfo[gameType].name}</h3>
-              <p class="game-description">{gameInfo[gameType].description}</p>
-              <div class="game-details">
-                <span class="players">{gameInfo[gameType].players}</span>
-                <span class="difficulty difficulty-{gameInfo[gameType].difficulty.toLowerCase()}">
-                  {gameInfo[gameType].difficulty}
+          {@const game = gameInfo[gameType]}
+          <div class="card card-hover cursor-pointer group" on:click={() => selectGame(gameType)}>
+            <!-- Game Icon -->
+            <div class="text-center mb-4">
+              <div class="text-6xl mb-3 group-hover:scale-110 transition-transform duration-300">
+                {game.icon}
+              </div>
+              <h3 class="text-xl font-bold text-white mb-2">{game.name}</h3>
+            </div>
+
+            <!-- Game Info -->
+            <div class="space-y-3 mb-6">
+              <p class="text-gray-300 text-sm leading-relaxed">
+                {game.description}
+              </p>
+              
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-blue-400 font-medium">
+                  👥 {game.minPlayers}-{game.maxPlayers} players
+                </span>
+                <span class="px-2 py-1 rounded-full text-xs font-semibold {game.difficulty === 'Easy' ? 'bg-green-500/20 text-green-400' : game.difficulty === 'Medium' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-red-500/20 text-red-400'}">
+                  {game.difficulty}
                 </span>
               </div>
-              <button class="play-button">Play Now</button>
+              
+              <div class="text-xs text-gray-400">
+                ⏱️ ~{game.estimatedTime}
+              </div>
             </div>
-          {/if}
+
+            <!-- Play Button -->
+            <button class="btn btn-primary w-full group-hover:scale-105 transition-transform duration-200">
+              🚀 Join Game
+            </button>
+          </div>
         {/each}
       </div>
-    {:else}
-      <div class="loading">
-        <div class="spinner"></div>
-        <p>Loading available games...</p>
-      </div>
-    {/if}
 
-    <div class="lobby-footer">
-      <p>More games coming soon!</p>
+      <!-- Info Section -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="card text-center">
+          <div class="text-3xl mb-2">⚡</div>
+          <h3 class="font-semibold mb-2">Fast Matchmaking</h3>
+          <p class="text-sm text-gray-400">
+            Join game lobbies instantly - no waiting for connections
+          </p>
+        </div>
+        
+        <div class="card text-center">
+          <div class="text-3xl mb-2">💬</div>
+          <h3 class="font-semibold mb-2">In-Game Chat</h3>
+          <p class="text-sm text-gray-400">
+            Chat with other players while waiting and playing
+          </p>
+        </div>
+        
+        <div class="card text-center">
+          <div class="text-3xl mb-2">🏆</div>
+          <h3 class="font-semibold mb-2">Competitive Play</h3>
+          <p class="text-sm text-gray-400">
+            Climb the leaderboards and prove your skills
+          </p>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="text-center mt-12">
+        <p class="text-gray-400">
+          More games coming soon! Each game has its own lobby system.
+        </p>
+      </div>
     </div>
   </div>
 {/if}
 
 <style>
-  .lobby-container {
-    padding: 2rem;
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-
-  .lobby-header {
-    text-align: center;
-    margin-bottom: 3rem;
-  }
-
-  .lobby-header h1 {
-    font-size: 3rem;
-    margin: 0 0 1rem 0;
-    color: #A78BFA;
-  }
-
-  .lobby-header p {
-    font-size: 1.2rem;
-    color: #9CA3AF;
-    margin: 0;
-  }
-
-  .games-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 2rem;
-    margin-bottom: 3rem;
-  }
-
-  .game-card {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 16px;
-    padding: 2rem;
-    text-align: center;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    position: relative;
-    overflow: hidden;
-  }
-
-  .game-card:hover {
-    transform: translateY(-4px);
-    border-color: #A78BFA;
-    box-shadow: 0 8px 32px rgba(167, 139, 250, 0.3);
-  }
-
-  .game-icon {
-    font-size: 4rem;
-    margin-bottom: 1rem;
-  }
-
-  .game-card h3 {
-    font-size: 1.5rem;
-    margin: 0 0 1rem 0;
-    color: #F0F0F0;
-  }
-
-  .game-description {
-    color: #9CA3AF;
-    margin: 0 0 1.5rem 0;
-    line-height: 1.5;
-  }
-
-  .game-details {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1.5rem;
-  }
-
-  .players {
-    color: #60A5FA;
-    font-weight: 500;
-  }
-
-  .difficulty {
-    padding: 0.25rem 0.75rem;
-    border-radius: 12px;
-    font-size: 0.875rem;
-    font-weight: 600;
-  }
-
-  .difficulty-easy {
-    background: rgba(34, 197, 94, 0.2);
-    color: #22C55E;
-  }
-
-  .difficulty-medium {
-    background: rgba(249, 115, 22, 0.2);
-    color: #F97316;
-  }
-
-  .difficulty-hard {
-    background: rgba(239, 68, 68, 0.2);
-    color: #EF4444;
-  }
-
-  .play-button {
-    width: 100%;
-    padding: 0.75rem;
-    background: linear-gradient(135deg, #7C3AED, #A78BFA);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .play-button:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(124, 58, 237, 0.4);
-  }
-
-  .loading, .connecting {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 3rem;
-  }
-
-  .spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid rgba(167, 139, 250, 0.3);
-    border-top: 3px solid #A78BFA;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-    margin-bottom: 1rem;
-  }
-
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-
-  .error-message {
-    text-align: center;
-    padding: 3rem;
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    border-radius: 16px;
-    margin: 2rem;
-  }
-
-  .error-message h3 {
-    color: #EF4444;
-    margin: 0 0 1rem 0;
-  }
-
-  .retry-button, .back-button {
-    padding: 0.75rem 1.5rem;
-    background: #DC2626;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 600;
-    margin-top: 1rem;
-  }
-
-  .retry-button:hover, .back-button:hover {
-    background: #B91C1C;
-  }
-
-  .coming-soon {
-    text-align: center;
-    padding: 3rem;
-  }
-
-  .coming-soon h2 {
-    color: #A78BFA;
-    margin: 0 0 2rem 0;
-  }
-
-  .lobby-footer {
-    text-align: center;
-    padding: 2rem;
-    color: #6B7280;
+  .game-container {
+    background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-tertiary) 100%);
   }
 </style>

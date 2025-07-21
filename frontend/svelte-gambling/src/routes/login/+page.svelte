@@ -1,14 +1,21 @@
 <script>
   import { goto } from '$app/navigation';
   import apiFetch from '$lib/api';
+  import { user } from '$lib/stores';
+  
   let username = '';
   let email = '';
   let password = '';
   let error = '';
+  let loading = false;
   let mode = 'login';
 
   async function submit() {
+    if (loading) return;
+    
     error = '';
+    loading = true;
+    
     const endpoint = mode === 'login' ? '/login' : '/register';
     const payload = mode === 'login'
       ? { username, password }
@@ -24,72 +31,174 @@
         throw new Error('Incomplete user data from server');
       }
 
-      // Save token and user
+      // Save token and user data
       localStorage.setItem('token', data.token);
-      localStorage.setItem('user', JSON.stringify({
+      
+      const userData = {
         id: data.id,
         username: data.username,
-      }));
+        wins: data.wins || 0,
+        losses: data.losses || 0,
+        profit: data.profit || 0
+      };
+      
+      user.set(userData);
 
-      goto('/');
+      console.log('✅ Authentication successful:', userData);
+      goto('/game');
+      
     } catch (err) {
+      console.error('❌ Authentication failed:', err);
       error = err.message || 'Something went wrong';
+    } finally {
+      loading = false;
     }
+  }
+
+  function switchMode() {
+    mode = mode === 'login' ? 'register' : 'login';
+    error = '';
+    username = '';
+    email = '';
+    password = '';
   }
 </script>
 
-<section class="max-w-md mx-auto mt-16 p-6 bg-gray-800 text-white rounded-2xl shadow-lg">
-  <h1 class="text-2xl font-bold mb-4">{mode === 'login' ? 'Login' : 'Register'}</h1>
+<svelte:head>
+  <title>{mode === 'login' ? 'Login' : 'Register'} - Gamble Royale</title>
+</svelte:head>
 
-  <form on:submit|preventDefault={submit} class="space-y-4">
-    <input
-      class="w-full px-4 py-2 rounded-xl bg-gray-700 text-white border border-gray-600 focus:outline-none focus:border-purple-400 text-sm"
-      placeholder="Username"
-      bind:value={username}
-      required
-      autocomplete="username"
-    />
+<div class="min-h-screen flex items-center justify-center p-6 relative overflow-hidden">
+  <!-- Background Animation -->
+  <div class="absolute inset-0 opacity-20">
+    <div class="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl animate-pulse"></div>
+    <div class="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500 rounded-full mix-blend-multiply filter blur-xl animate-pulse" style="animation-delay: 1s;"></div>
+  </div>
 
-    {#if mode === 'register'}
-      <input
-        type="email"
-        class="w-full px-4 py-2 rounded-xl bg-gray-700 text-white border border-gray-600 focus:outline-none focus:border-purple-400 text-sm"
-        placeholder="Email"
-        bind:value={email}
-        required
-        autocomplete="email"
-      />
-    {/if}
+  <!-- Login/Register Form -->
+  <div class="relative z-10 w-full max-w-md">
+    <div class="card">
+      <!-- Header -->
+      <div class="text-center mb-8">
+        <h1 class="text-3xl font-bold mb-2 bg-gradient-to-r from-purple-400 to-blue-500 bg-clip-text text-transparent">
+          {mode === 'login' ? 'Welcome Back' : 'Join the Arena'}
+        </h1>
+        <p class="text-gray-400">
+          {mode === 'login' 
+            ? 'Sign in to continue your gaming journey' 
+            : 'Create your account and start competing'}
+        </p>
+      </div>
 
-    <input
-      type="password"
-      class="w-full px-4 py-2 rounded-xl bg-gray-700 text-white border border-gray-600 focus:outline-none focus:border-purple-400 text-sm"
-      placeholder="Password"
-      bind:value={password}
-      required
-      autocomplete={mode === 'login' ? 'current-password' : 'new-password'}
-    />
+      <!-- Form -->
+      <form on:submit|preventDefault={submit} class="space-y-4">
+        <!-- Username -->
+        <div>
+          <label for="username" class="block text-sm font-medium text-gray-300 mb-2">
+            Username
+          </label>
+          <input
+            id="username"
+            type="text"
+            class="input"
+            placeholder="Enter your username"
+            bind:value={username}
+            required
+            autocomplete="username"
+            disabled={loading}
+          />
+        </div>
 
-    <button
-      type="submit"
-      class="w-full py-2 bg-purple-600 hover:bg-purple-700 rounded-xl font-semibold text-sm transition text-black"
-    >
-      {mode === 'login' ? 'Login' : 'Register'}
-    </button>
+        <!-- Email (Register only) -->
+        {#if mode === 'register'}
+          <div>
+            <label for="email" class="block text-sm font-medium text-gray-300 mb-2">
+              Email
+            </label>
+            <input
+              id="email"
+              type="email"
+              class="input"
+              placeholder="Enter your email"
+              bind:value={email}
+              required
+              autocomplete="email"
+              disabled={loading}
+            />
+          </div>
+        {/if}
 
-    {#if error}
-      <div class="text-red-400 text-sm mt-2">{error}</div>
-    {/if}
-  </form>
+        <!-- Password -->
+        <div>
+          <label for="password" class="block text-sm font-medium text-gray-300 mb-2">
+            Password
+          </label>
+          <input
+            id="password"
+            type="password"
+            class="input"
+            placeholder="Enter your password"
+            bind:value={password}
+            required
+            autocomplete={mode === 'login' ? 'current-password' : 'new-password'}
+            disabled={loading}
+          />
+        </div>
 
-  <p class="mt-4 text-sm text-gray-300">
-    {mode === 'login' ? 'Need an account?' : 'Already have an account?'}
-    <a
-      href="#"
-      on:click={(e) => { e.preventDefault(); mode = mode === 'login' ? 'register' : 'login'; error = ''; }}
-      class="underline ml-1 cursor-pointer hover:text-purple-400"
-    >
-      {mode === 'login' ? 'Register here' : 'Login'}
-    </a>
-  </p>
-</section>
+        <!-- Error Message -->
+        {#if error}
+          <div class="p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 text-sm">
+            {error}
+          </div>
+        {/if}
+
+        <!-- Submit Button -->
+        <button
+          type="submit"
+          class="btn btn-primary w-full text-lg py-3 font-semibold"
+          disabled={loading}
+        >
+          {#if loading}
+            <div class="flex items-center justify-center gap-2">
+              <div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+              {mode === 'login' ? 'Signing in...' : 'Creating account...'}
+            </div>
+          {:else}
+            {mode === 'login' ? '🚀 Sign In' : '✨ Create Account'}
+          {/if}
+        </button>
+
+        <!-- Mode Switch -->
+        <div class="text-center pt-4 border-t border-white/10">
+          <p class="text-gray-400 text-sm">
+            {mode === 'login' ? "Don't have an account?" : "Already have an account?"}
+            <button
+              type="button"
+              class="text-purple-400 hover:text-purple-300 font-medium ml-1 underline"
+              on:click={switchMode}
+              disabled={loading}
+            >
+              {mode === 'login' ? 'Sign up' : 'Sign in'}
+            </button>
+          </p>
+        </div>
+      </form>
+    </div>
+
+    <!-- Benefits -->
+    <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div class="text-center p-4 bg-white/5 rounded-lg">
+        <div class="text-2xl mb-2">🎮</div>
+        <div class="text-xs text-gray-400">Free to Play</div>
+      </div>
+      <div class="text-center p-4 bg-white/5 rounded-lg">
+        <div class="text-2xl mb-2">🏆</div>
+        <div class="text-xs text-gray-400">Skill Based</div>
+      </div>
+      <div class="text-center p-4 bg-white/5 rounded-lg">
+        <div class="text-2xl mb-2">⚡</div>
+        <div class="text-xs text-gray-400">Real Time</div>
+      </div>
+    </div>
+  </div>
+</div>

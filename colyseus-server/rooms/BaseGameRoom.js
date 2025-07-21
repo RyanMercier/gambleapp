@@ -5,6 +5,7 @@ const { Schema, MapSchema } = require("@colyseus/schema");
 class BasePlayer extends Schema {
   constructor() {
     super();
+    this.username = "";
     this.x = 400;
     this.y = 300;
     this.alive = true;
@@ -13,6 +14,7 @@ class BasePlayer extends Schema {
   }
 }
 BasePlayer.schema = {
+  username: "string",
   x: "number",
   y: "number",
   alive: "boolean",
@@ -45,10 +47,16 @@ class BaseGameRoom extends Room {
     this.minPlayers = 2;
     this.gameStartTimer = null;
     this.gameInterval = null;
+    this.pendingPlayers = null;
   }
 
-  onCreate() {
+  onCreate(options) {
     this.setState(new BaseGameState());
+    
+    if (options.players) {
+      this.pendingPlayers = options.players;
+    }
+    
     this.setupMessageHandlers();
     this.initializeGame();
   }
@@ -62,12 +70,6 @@ class BaseGameRoom extends Room {
       }
     });
 
-    this.onMessage("update", (client, data) => {
-      if (this.state.gameStarted) {
-        this.handlePlayerUpdate(client, data);
-      }
-    });
-
     this.onMessage("restart", (client) => {
       if (this.state.gamePhase === "finished") {
         this.resetGame();
@@ -75,23 +77,40 @@ class BaseGameRoom extends Room {
     });
   }
 
-  onJoin(client) {
+  onJoin(client, options) {
     const player = this.createPlayer();
-    this.state.players.set(client.sessionId, player);
-    console.log(`Player ${client.sessionId} joined ${this.roomName}. Total: ${this.state.players.size}`);
     
-    client.send("game_info", {
-      message: this.getWelcomeMessage(),
-      minPlayers: this.minPlayers,
-      gameRules: this.getGameRules()
-    });
-
+    // Set username from pending players or options
+    if (this.pendingPlayers) {
+      const pendingPlayer = this.pendingPlayers.find(p => p.sessionId === client.sessionId);
+      if (pendingPlayer) {
+        player.username = pendingPlayer.username;
+      }
+    } else if (options.username) {
+      player.username = options.username;
+    } else {
+      player.username = `Player${client.sessionId.slice(0, 4)}`;
+    }
+    
+    this.state.players.set(client.sessionId, player);
+    console.log(`Player ${player.username} (${client.sessionId}) joined game. Total: ${this.state.players.size}`);
+    
     this.onPlayerJoin(client, player);
+    
+    // Auto-start if all pending players joined
+    if (this.pendingPlayers && this.state.players.size === this.pendingPlayers.length) {
+      setTimeout(() => {
+        this.autoStartGame();
+      }, 1000);
+    }
   }
 
   onLeave(client) {
+    const player = this.state.players.get(client.sessionId);
+    const username = player ? player.username : client.sessionId;
+    
     this.state.players.delete(client.sessionId);
-    console.log(`Player ${client.sessionId} left ${this.roomName}. Total: ${this.state.players.size}`);
+    console.log(`Player ${username} left game. Total: ${this.state.players.size}`);
     
     if (this.state.gameStarted) {
       this.checkGameEnd();
@@ -102,6 +121,15 @@ class BaseGameRoom extends Room {
     }
 
     this.onPlayerLeave(client);
+  }
+
+  autoStartGame() {
+    // Auto-ready all players and start
+    this.state.players.forEach(player => {
+      player.ready = true;
+    });
+    
+    this.startGameCountdown();
   }
 
   checkReadyState() {
@@ -191,11 +219,12 @@ class BaseGameRoom extends Room {
     }
     
     if (winner) {
-      this.state.winner = winner;
+      this.state.winner = winner.username;
       winner.score++;
       this.broadcast("game_ended", { 
         winner: true, 
-        message: `Game Over! Winner decided!`,
+        winnerName: winner.username,
+        message: `🎉 ${winner.username} wins!`,
         winnerScore: winner.score
       });
     } else {
@@ -256,22 +285,6 @@ class BaseGameRoom extends Room {
 
   createPlayer() {
     return new BasePlayer();
-  }
-
-  getWelcomeMessage() {
-    return "Welcome to the game! Click 'Ready' when you're ready to play.";
-  }
-
-  getGameRules() {
-    return ["Be the last player standing!", "Use mouse/keyboard to control your character"];
-  }
-
-  handlePlayerUpdate(client, data) {
-    const player = this.state.players.get(client.sessionId);
-    if (player) {
-      player.x = data.x;
-      player.y = data.y;
-    }
   }
 
   gameUpdate() {
