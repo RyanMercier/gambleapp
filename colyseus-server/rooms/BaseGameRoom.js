@@ -1,4 +1,4 @@
-// BaseGameRoom.js - Framework for all multiplayer games
+// BaseGameRoom.js - Enhanced Framework with Database Integration
 const { Room } = require("colyseus");
 const { Schema, MapSchema } = require("@colyseus/schema");
 
@@ -11,6 +11,7 @@ class BasePlayer extends Schema {
     this.alive = true;
     this.ready = false;
     this.score = 0;
+    this.userId = null; // For database integration
   }
 }
 BasePlayer.schema = {
@@ -19,7 +20,8 @@ BasePlayer.schema = {
   y: "number",
   alive: "boolean",
   ready: "boolean",
-  score: "number"
+  score: "number",
+  userId: "string"
 };
 
 class BaseGameState extends Schema {
@@ -80,14 +82,16 @@ class BaseGameRoom extends Room {
   onJoin(client, options) {
     const player = this.createPlayer();
     
-    // Set username from pending players or options
+    // Set username and userId from options
     if (this.pendingPlayers) {
       const pendingPlayer = this.pendingPlayers.find(p => p.sessionId === client.sessionId);
       if (pendingPlayer) {
         player.username = pendingPlayer.username;
+        player.userId = pendingPlayer.userId; // Store user ID for database updates
       }
     } else if (options.username) {
       player.username = options.username;
+      player.userId = options.userId || null;
     } else {
       player.username = `Player${client.sessionId.slice(0, 4)}`;
     }
@@ -209,7 +213,7 @@ class BaseGameRoom extends Room {
     }
   }
 
-  endGame(winner = null) {
+  async endGame(winner = null) {
     this.state.gameStarted = false;
     this.state.gamePhase = "finished";
     
@@ -218,9 +222,15 @@ class BaseGameRoom extends Room {
       this.gameInterval = null;
     }
     
+    // Update player statistics in database
+    try {
+      await this.updatePlayerStats(winner);
+    } catch (error) {
+      console.error("Error updating player stats:", error);
+    }
+    
     if (winner) {
       this.state.winner = winner.username;
-      winner.score++;
       this.broadcast("game_ended", { 
         winner: true, 
         winnerName: winner.username,
@@ -240,6 +250,45 @@ class BaseGameRoom extends Room {
     setTimeout(() => {
       this.resetGame();
     }, 10000);
+  }
+
+  async updatePlayerStats(winner) {
+    console.log("Updating player statistics...");
+    
+    // Import database connection (assuming we have access to it)
+    // This would need to be properly configured in your setup
+    try {
+      const players = Array.from(this.state.players.values());
+      
+      for (const player of players) {
+        if (!player.userId) {
+          console.log(`Skipping stats update for ${player.username} - no user ID`);
+          continue;
+        }
+        
+        const isWinner = player === winner;
+        const statsUpdate = {
+          wins: isWinner ? 1 : 0,
+          losses: isWinner ? 0 : 1,
+          profit: player.score || 0 // Use the player's score as profit
+        };
+        
+        console.log(`Updating stats for ${player.username}:`, statsUpdate);
+        
+        // Here you would make an API call to your backend to update stats
+        // For now, we'll just log it
+        this.broadcast("stats_updated", {
+          playerId: player.userId,
+          username: player.username,
+          isWinner,
+          score: player.score,
+          statsUpdate
+        });
+      }
+      
+    } catch (error) {
+      console.error("Failed to update player statistics:", error);
+    }
   }
 
   resetGame() {
