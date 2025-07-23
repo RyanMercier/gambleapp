@@ -1,10 +1,18 @@
 <script>
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import GameLobby from "./GameLobby.svelte";
   
   let selectedGame = null;
   let connecting = false;
   let error = null;
+  
+  // Global chat state
+  let globalChatClient = null;
+  let globalChatRoom = null;
+  let globalMessages = [];
+  let newGlobalMessage = "";
+  let globalChatContainer;
+  let connectedToGlobalChat = false;
 
   const gameInfo = {
     balance: {
@@ -16,11 +24,100 @@
       difficulty: "Medium",
       estimatedTime: "3-5 minutes"
     }
-    // Future games can be added here
   };
 
-  // Available games (no server connection needed)
+  // Available games
   const availableGames = Object.keys(gameInfo);
+  
+  onMount(async () => {
+    await connectToGlobalChat();
+  });
+  
+  onDestroy(() => {
+    if (globalChatRoom) {
+      globalChatRoom.leave();
+    }
+    globalChatClient = null;
+  });
+  
+  async function connectToGlobalChat() {
+    try {
+      const Colyseus = await import("colyseus.js");
+      globalChatClient = new Colyseus.Client("ws://localhost:2567");
+      
+      const user = JSON.parse(localStorage.getItem("user") || "{}");
+      const username = user.username || `Player${Date.now().toString().slice(-4)}`;
+      
+      // Connect to global chat room
+      globalChatRoom = await globalChatClient.joinOrCreate("global_chat", {
+        username: username
+      });
+      
+      setupGlobalChatHandlers();
+      connectedToGlobalChat = true;
+      
+      console.log("✅ Connected to global chat");
+      
+    } catch (err) {
+      console.error("Failed to connect to global chat:", err);
+      // Don't show error for global chat, it's optional
+    }
+  }
+  
+  function setupGlobalChatHandlers() {
+    globalChatRoom.onMessage("chat_message", (data) => {
+      addGlobalMessage(data.username, data.message, data.timestamp);
+    });
+    
+    globalChatRoom.onMessage("user_joined", (data) => {
+      addGlobalMessage("System", `${data.username} joined the lobby`, Date.now(), true);
+    });
+    
+    globalChatRoom.onMessage("user_left", (data) => {
+      addGlobalMessage("System", `${data.username} left the lobby`, Date.now(), true);
+    });
+  }
+  
+  function addGlobalMessage(username, message, timestamp, isSystem = false) {
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    const msg = {
+      id: `${timestamp}_${Math.random()}`,
+      username: username,
+      message: message,
+      timestamp: timestamp,
+      isOwn: username === user.username,
+      isSystem: isSystem
+    };
+    
+    globalMessages = [...globalMessages, msg];
+    
+    // Keep only last 100 messages
+    if (globalMessages.length > 100) {
+      globalMessages = globalMessages.slice(-100);
+    }
+    
+    // Auto-scroll
+    setTimeout(() => {
+      if (globalChatContainer) {
+        globalChatContainer.scrollTop = globalChatContainer.scrollHeight;
+      }
+    }, 10);
+  }
+  
+  function sendGlobalMessage() {
+    const message = newGlobalMessage.trim();
+    if (message && globalChatRoom && connectedToGlobalChat) {
+      globalChatRoom.send("chat_message", { text: message });
+      newGlobalMessage = "";
+    }
+  }
+  
+  function handleGlobalChatKeyPress(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      sendGlobalMessage();
+    }
+  }
 
   function selectGame(gameType) {
     if (connecting) return;
@@ -39,108 +136,123 @@
   <GameLobby gameType={selectedGame} onBack={backToSelection} />
 {:else}
   <!-- Game Selection Menu -->
-  <div class="min-h-screen game-container">
-    <div class="max-w-6xl mx-auto p-6">
+  <div class="h-full flex">
+    <!-- Main Content -->
+    <div class="flex-1 flex flex-col">
       <!-- Header -->
-      <div class="text-center mb-12">
-        <h1 class="text-4xl font-bold mb-4 bg-gradient-to-r from-purple-400 to-blue-500 bg-clip-text text-transparent">
+      <div class="text-center py-8 px-6">
+        <h1 class="text-4xl font-bold mb-4 text-white">
           🎮 Choose Your Game
         </h1>
-        <p class="text-xl text-gray-300 max-w-2xl mx-auto">
+        <p class="text-xl text-gray-300">
           Select a game to join and compete with players from around the world
         </p>
       </div>
 
-      {#if error}
-        <div class="card bg-red-500/10 border-red-500/20 text-center mb-8">
-          <h3 class="text-red-400 font-semibold mb-2">Error</h3>
-          <p class="text-gray-300 mb-4">{error}</p>
-          <button class="btn btn-primary" on:click={() => error = null}>
-            Try Again
+      <!-- Game Grid -->
+      <div class="flex-1 px-6 pb-8 overflow-y-auto">
+        <div class="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-6">
+          {#each availableGames as gameType}
+            {@const game = gameInfo[gameType]}
+            <button 
+              class="card bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-purple-500 transition-all p-6 text-left"
+              on:click={() => selectGame(gameType)}
+            >
+              <!-- Game Icon -->
+              <div class="text-5xl mb-4">{game.icon}</div>
+              
+              <!-- Game Info -->
+              <h3 class="text-xl font-bold text-white mb-2">{game.name}</h3>
+              <p class="text-gray-300 text-sm mb-4">{game.description}</p>
+              
+              <!-- Game Stats -->
+              <div class="space-y-1 text-sm">
+                <div class="flex justify-between">
+                  <span class="text-gray-400">Players:</span>
+                  <span class="text-blue-400">{game.minPlayers}-{game.maxPlayers}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-gray-400">Duration:</span>
+                  <span class="text-green-400">{game.estimatedTime}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-gray-400">Difficulty:</span>
+                  <span class="{game.difficulty === 'Easy' ? 'text-green-400' : game.difficulty === 'Medium' ? 'text-yellow-400' : 'text-red-400'}">
+                    {game.difficulty}
+                  </span>
+                </div>
+              </div>
+            </button>
+          {/each}
+        </div>
+      </div>
+    </div>
+
+    <!-- Global Chat Sidebar -->
+    <div class="w-80 chat-container">
+      <div class="chat-header">
+        <h3 class="font-semibold flex items-center gap-2">
+          🌍 Global Chat
+          {#if connectedToGlobalChat}
+            <span class="w-2 h-2 bg-green-400 rounded-full"></span>
+          {:else}
+            <span class="w-2 h-2 bg-red-400 rounded-full"></span>
+          {/if}
+        </h3>
+        <p class="text-xs text-gray-400 mt-1">Chat with players looking for games</p>
+      </div>
+      
+      <div class="chat-messages" bind:this={globalChatContainer}>
+        {#each globalMessages as message}
+          {#if message.isSystem}
+            <div class="chat-system-message">
+              {message.message}
+            </div>
+          {:else}
+            <div class="chat-message {message.isOwn ? 'own' : ''}">
+              <div class="chat-message-content">
+                {#if !message.isOwn}
+                  <div class="chat-message-username">{message.username}</div>
+                {/if}
+                <div class="chat-message-bubble">
+                  <div class="chat-message-text">{message.message}</div>
+                  <div class="chat-message-time">
+                    {new Date(message.timestamp).toLocaleTimeString()}
+                  </div>
+                </div>
+              </div>
+            </div>
+          {/if}
+        {/each}
+        
+        {#if globalMessages.length === 0}
+          <div class="chat-empty">
+            <div class="chat-empty-icon">🌍</div>
+            <div>No messages yet</div>
+            <div class="text-sm">Say hello!</div>
+          </div>
+        {/if}
+      </div>
+      
+      <div class="chat-input-container">
+        <div class="chat-input-group">
+          <input
+            type="text"
+            placeholder={connectedToGlobalChat ? "Type a message..." : "Connecting..."}
+            class="chat-input"
+            bind:value={newGlobalMessage}
+            on:keydown={handleGlobalChatKeyPress}
+            disabled={!connectedToGlobalChat}
+          />
+          <button 
+            class="chat-send-btn"
+            on:click={sendGlobalMessage}
+            disabled={!newGlobalMessage.trim() || !connectedToGlobalChat}
+          >
+            Send
           </button>
         </div>
-      {/if}
-
-      <!-- Game Grid -->
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-        {#each availableGames as gameType}
-          {@const game = gameInfo[gameType]}
-          <div class="card card-hover cursor-pointer group" on:click={() => selectGame(gameType)}>
-            <!-- Game Icon -->
-            <div class="text-center mb-4">
-              <div class="text-6xl mb-3 group-hover:scale-110 transition-transform duration-300">
-                {game.icon}
-              </div>
-              <h3 class="text-xl font-bold text-white mb-2">{game.name}</h3>
-            </div>
-
-            <!-- Game Info -->
-            <div class="space-y-3 mb-6">
-              <p class="text-gray-300 text-sm leading-relaxed">
-                {game.description}
-              </p>
-              
-              <div class="flex items-center justify-between text-sm">
-                <span class="text-blue-400 font-medium">
-                  👥 {game.minPlayers}-{game.maxPlayers} players
-                </span>
-                <span class="px-2 py-1 rounded-full text-xs font-semibold {game.difficulty === 'Easy' ? 'bg-green-500/20 text-green-400' : game.difficulty === 'Medium' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-red-500/20 text-red-400'}">
-                  {game.difficulty}
-                </span>
-              </div>
-              
-              <div class="text-xs text-gray-400">
-                ⏱️ ~{game.estimatedTime}
-              </div>
-            </div>
-
-            <!-- Play Button -->
-            <button class="btn btn-primary w-full group-hover:scale-105 transition-transform duration-200">
-              🚀 Join Game
-            </button>
-          </div>
-        {/each}
-      </div>
-
-      <!-- Info Section -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div class="card text-center">
-          <div class="text-3xl mb-2">⚡</div>
-          <h3 class="font-semibold mb-2">Fast Matchmaking</h3>
-          <p class="text-sm text-gray-400">
-            Join game lobbies instantly - no waiting for connections
-          </p>
-        </div>
-        
-        <div class="card text-center">
-          <div class="text-3xl mb-2">💬</div>
-          <h3 class="font-semibold mb-2">In-Game Chat</h3>
-          <p class="text-sm text-gray-400">
-            Chat with other players while waiting and playing
-          </p>
-        </div>
-        
-        <div class="card text-center">
-          <div class="text-3xl mb-2">🏆</div>
-          <h3 class="font-semibold mb-2">Competitive Play</h3>
-          <p class="text-sm text-gray-400">
-            Climb the leaderboards and prove your skills
-          </p>
-        </div>
-      </div>
-
-      <!-- Footer -->
-      <div class="text-center mt-12">
-        <p class="text-gray-400">
-          More games coming soon! Each game has its own lobby system.
-        </p>
       </div>
     </div>
   </div>
 {/if}
-
-<style>
-  .game-container {
-    background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-tertiary) 100%);
-  }
-</style>

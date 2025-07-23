@@ -26,21 +26,21 @@
   <meta name="description" content="Compete in multiplayer skill-based games and climb the leaderboards!" />
 </svelte:head>
 
-<div class="min-h-screen flex flex-col" style="background: linear-gradient(135deg, #0F0F23 0%, #1A1A2E 50%, #16213E 100%); color: white;">
+<div class="min-h-screen flex flex-col bg-gradient-to-br from-gray-900 to-purple-900 text-white">
   <!-- Navigation -->
-  <nav class="flex justify-between items-center px-6 py-4" style="background: rgba(0,0,0,0.2); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(255,255,255,0.1);">
+  <nav class="flex justify-between items-center px-6 py-4 bg-black/30 backdrop-blur-sm border-b border-white/10">
     <div class="flex items-center gap-3">
-      <div class="text-2xl font-bold" style="background: linear-gradient(to right, #A78BFA, #60A5FA); -webkit-background-clip: text; background-clip: text; color: transparent;">
+      <a href="/" class="text-2xl font-bold bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
         🎲 Gamble Royale
-      </div>
-      <div class="text-xs px-2 py-1 rounded-full" style="background: rgba(167, 139, 250, 0.2); color: #C4B5FD;">
+      </a>
+      <div class="text-xs px-2 py-1 rounded-full bg-purple-500/20 text-purple-300">
         BETA
       </div>
     </div>
     
     <div class="flex items-center gap-4">
       <!-- Navigation Links -->
-      <div class="hidden md:flex items-center gap-1">
+      <div class="hidden md:flex items-center gap-2">
         <a href="/" class="btn btn-secondary text-sm">
           🏠 Home
         </a>
@@ -55,16 +55,11 @@
       <!-- User Section -->
       {#if $user}
         <div class="flex items-center gap-3">
-          <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full" style="background: rgba(255,255,255,0.1);">
-            <div class="w-6 h-6 rounded-full flex items-center justify-center text-xs text-white font-bold" style="background: linear-gradient(135deg, #A78BFA, #60A5FA);">
+          <div class="hidden sm:flex items-center gap-2 px-3 py-2 rounded-full bg-white/10">
+            <div class="w-6 h-6 rounded-full bg-gradient-to-br from-purple-400 to-blue-500 flex items-center justify-center text-xs text-white font-bold">
               {$user.username.charAt(0).toUpperCase()}
             </div>
             <span class="text-sm font-medium">{$user.username}</span>
-            {#if $user.wins !== undefined}
-              <span class="text-xs" style="color: #9CA3AF;">
-                {$user.wins}W-{$user.losses}L
-              </span>
-            {/if}
           </div>
           <button class="btn btn-secondary text-sm" on:click={logout}>
             Logout
@@ -84,12 +79,12 @@
   </main>
 
   <!-- Footer -->
-  <footer class="text-center py-6 px-6" style="background: rgba(0,0,0,0.2); border-top: 1px solid rgba(255,255,255,0.1);">
-    <div class="text-sm" style="color: #9CA3AF;">
+  <footer class="bg-black/30 border-t border-white/10 py-4 px-6">
+    <div class="text-center text-sm text-gray-400">
       <p>© 2024 Gamble Royale • Built with ❤️ for gamers</p>
       <div class="flex items-center justify-center gap-4 mt-2">
         <span class="flex items-center gap-1">
-          <div class="w-2 h-2 rounded-full" style="background: #10B981;"></div>
+          <div class="w-2 h-2 rounded-full bg-green-400"></div>
           Server Online
         </span>
         <span>•</span>
@@ -98,3 +93,12 @@
     </div>
   </footer>
 </div>
+
+<style>
+  /* Prevent body from creating extra scrollbars */
+  :global(body) {
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
+</style>

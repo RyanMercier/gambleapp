@@ -18,6 +18,7 @@ const gameServer = new Server({
 });
 
 // Import game rooms
+const GlobalChatRoom = require("./rooms/GlobalChatRoom");
 const BalanceRoom = require("./rooms/BalanceRoom");
 
 // Lobby schemas using decorators
@@ -279,6 +280,8 @@ class GameLobbyRoom extends Room {
 }
 
 // Register rooms
+gameServer.define("global_chat", GlobalChatRoom);
+
 gameServer.define("balance_lobby", GameLobbyRoom)
   .filterBy(['gameType']);
 
