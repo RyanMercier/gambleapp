@@ -21,12 +21,6 @@
   let ownStick = null;
   let otherPlayerSticks = {};
   let plates = {};
-  
-  // Debug info
-  let debugInfo = {
-    platesInState: 0,
-    gameStarted: false
-  };
 
   onMount(async () => {
     if (!gameRoom) {
@@ -49,7 +43,7 @@
   });
 
   function setupRoomHandlers() {
-    // Handle all message types properly
+    // Handle all message types
     gameRoom.onMessage("game_info", (data) => {
       console.log("📋 Game info received:", data);
     });
@@ -57,25 +51,21 @@
     gameRoom.onMessage("game_countdown", (data) => {
       countdown = data.countdown;
       gamePhase = "ready";
-      console.log(`⏰ Game countdown: ${data.countdown}`);
     });
 
     gameRoom.onMessage("game_started", (data) => {
       gamePhase = "playing";
       countdown = 0;
-      console.log("🚀 Game started!");
     });
 
     gameRoom.onMessage("game_ended", (data) => {
       gamePhase = "finished";
       winner = data.winnerName || data.winner;
-      console.log("🏁 Game ended, winner:", winner);
     });
     
     gameRoom.onMessage("game_reset", (data) => {
       gamePhase = "waiting";
       winner = null;
-      console.log("🔄 Game reset");
     });
     
     gameRoom.onMessage("player_hit", (data) => {
@@ -93,7 +83,7 @@
 
     // Initial state setup
     gameRoom.onStateChange.once((state) => {
-      console.log("📊 Initial game state received:", state);
+      console.log("📊 Initial game state received");
       updateFromState(state);
       setupStateListeners(state);
     });
@@ -101,8 +91,6 @@
     // Continuous state updates
     gameRoom.onStateChange((state) => {
       updateFromState(state);
-      debugInfo.gameStarted = state.gameStarted || false;
-      debugInfo.platesInState = state.plates?.size || 0;
     });
   }
 
@@ -110,7 +98,7 @@
     // Handle players
     if (state.players) {
       state.players.onAdd = (player, sessionId) => {
-        console.log(`👤 Player added: ${player.username} (${sessionId})`);
+        console.log(`👤 Player added: ${player.username}`);
         
         if (sessionId !== gameRoom.sessionId) {
           createOtherPlayerVisual(sessionId, player);
@@ -129,10 +117,10 @@
       };
     }
 
-    // Handle plates - check if plates exist first
+    // Handle plates - check if exists first
     if (state.plates) {
       state.plates.onAdd = (plate, plateId) => {
-        console.log(`🍽️ Plate added: ${plateId} at (${plate.x}, ${plate.y})`);
+        console.log(`🍽️ Plate added: ${plateId}`);
         createPlateVisual(plateId, plate);
         
         plate.onChange = () => {
@@ -144,8 +132,6 @@
         console.log(`🗑️ Plate removed: ${plateId}`);
         destroyPlate(plateId);
       };
-    } else {
-      console.log("⚠️ No plates collection in state yet");
     }
   }
 
@@ -196,20 +182,19 @@
     // Platform
     this.add.rectangle(400, 520, 700, 20, 0x4a5568);
     
-    // Platform edges (danger zones)
+    // Danger zones
     this.add.rectangle(25, 520, 50, 30, 0xef4444);
     this.add.rectangle(775, 520, 50, 30, 0xef4444);
     
     // Own player stick
     ownStick = this.add.rectangle(400, 480, 20, 80, 0x9333ea);
     
-    // Mouse/touch input
+    // Mouse input
     this.input.on('pointermove', (pointer) => {
       if (gamePhase === "playing" && ownPlayer?.alive && ownStick) {
         const targetX = Phaser.Math.Clamp(pointer.x, 50, 750);
         ownStick.x = targetX;
         
-        // Send position update to server
         gameRoom.send("player_update", {
           x: targetX,
           y: ownStick.y,
@@ -220,7 +205,7 @@
   }
 
   function update() {
-    // Game updates handled by server state
+    // Game updates handled by server
   }
 
   function createOtherPlayerVisual(sessionId, player) {
@@ -299,15 +284,13 @@
   }
   
   function addChatMessage(username, message, timestamp) {
-    const msg = {
+    chatMessages = [...chatMessages, {
       id: `${timestamp}_${Math.random()}`,
       username: username,
       message: message,
       timestamp: timestamp,
       isOwn: username === (ownPlayer?.username || "")
-    };
-    
-    chatMessages = [...chatMessages, msg];
+    }];
     
     // Auto-scroll
     setTimeout(() => {
@@ -377,7 +360,7 @@
       <!-- Players bar -->
       <div class="flex gap-2 p-3 bg-black/30 overflow-x-auto">
         {#each players as player}
-          <div class="flex items-center gap-2 px-3 py-2 rounded bg-gray-800 min-w-fit {player.isOwn ? 'ring-2 ring-purple-400' : ''}">
+          <div class="flex items-center gap-2 px-3 py-2 bg-gray-800 {player.isOwn ? 'ring-2 ring-purple-400' : ''}">
             <div class="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-blue-500 flex items-center justify-center text-white font-bold text-sm">
               {player.username.charAt(0).toUpperCase()}
             </div>
@@ -393,62 +376,43 @@
 
       <!-- Phaser container -->
       <div class="flex-1 p-4">
-        <div id="phaser-container" class="w-full h-full rounded-lg overflow-hidden"></div>
+        <div id="phaser-container" class="w-full h-full rounded-lg overflow-hidden bg-gray-800"></div>
       </div>
-      
-      <!-- Debug info -->
-      {#if false}
-        <div class="absolute top-20 left-4 bg-black/80 text-white p-2 rounded text-xs">
-          <div>Phase: {gamePhase}</div>
-          <div>Started: {debugInfo.gameStarted}</div>
-          <div>Plates: {Object.keys(plates).length} / {debugInfo.platesInState}</div>
-        </div>
-      {/if}
     </div>
 
-    <!-- Chat sidebar -->
-    <div class="w-80 chat-container">
-      <div class="chat-header">
+    <!-- Chat sidebar - NO BUBBLES, SIMPLE LAYOUT -->
+    <div class="w-80 flex flex-col bg-black/50 border-l border-white/10">
+      <div class="p-3 border-b border-white/10 bg-black/30">
         <h3 class="font-semibold">Game Chat</h3>
       </div>
       
-      <div class="chat-messages" bind:this={chatContainer}>
-        {#each chatMessages as message}
-          <div class="chat-message {message.isOwn ? 'own' : ''}">
-            <div class="chat-message-content">
-              {#if !message.isOwn}
-                <div class="chat-message-username">{message.username}</div>
-              {/if}
-              <div class="chat-message-bubble">
-                <div class="chat-message-text">{message.message}</div>
-                <div class="chat-message-time">
-                  {new Date(message.timestamp).toLocaleTimeString()}
-                </div>
-              </div>
-            </div>
+      <div class="flex-1 overflow-y-auto p-4 space-y-1" bind:this={chatContainer}>
+        {#each chatMessages as msg}
+          <div class="text-sm">
+            <span class="font-semibold {msg.isOwn ? 'text-purple-400' : 'text-gray-400'}">{msg.username}:</span>
+            <span class="text-gray-200 ml-1">{msg.message}</span>
           </div>
         {/each}
         
         {#if chatMessages.length === 0}
-          <div class="chat-empty">
-            <div class="chat-empty-icon">💬</div>
-            <div>No messages yet</div>
-            <div class="text-sm">Be the first to chat!</div>
+          <div class="text-center text-gray-500 py-8">
+            <div class="text-2xl mb-2">💬</div>
+            <div class="text-sm">No messages yet</div>
           </div>
         {/if}
       </div>
       
-      <div class="chat-input-container">
-        <div class="chat-input-group">
+      <div class="p-3 border-t border-white/10 bg-black/30">
+        <div class="flex gap-2">
           <input
             type="text"
             placeholder="Type a message..."
-            class="chat-input"
+            class="flex-1 px-3 py-2 bg-gray-800 text-white text-sm border border-gray-700 focus:outline-none focus:border-purple-500"
             bind:value={newMessage}
             on:keydown={handleChatKeyPress}
           />
           <button 
-            class="chat-send-btn"
+            class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium"
             on:click={sendChatMessage}
             disabled={!newMessage.trim()}
           >

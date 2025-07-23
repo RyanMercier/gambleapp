@@ -226,17 +226,6 @@ html, body {
   margin-bottom: 0.25rem;
 }
 
-.chat-message-bubble {
-  background: rgba(55, 65, 81, 0.8); /* Gray-700 with opacity */
-  border-radius: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  word-break: break-word;
-}
-
-.chat-message.own .chat-message-bubble {
-  background: var(--primary-purple);
-}
-
 .chat-message-text {
   font-size: 0.875rem;
   color: var(--text-primary);
