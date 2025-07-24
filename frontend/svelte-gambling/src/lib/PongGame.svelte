@@ -1,4 +1,3 @@
-<!-- PongGame.svelte -->
 <script>
   import { onMount, onDestroy } from "svelte";
   import Chat from "./Chat.svelte";
@@ -38,7 +37,10 @@
     
     console.log("🏓 Setting up Pong Game with room:", gameRoom.sessionId);
     
+    // Set up handlers FIRST, before anything else
     setupRoomHandlers();
+    
+    // Then set up Phaser
     setupPhaserGame(Phaser);
   });
 
@@ -93,7 +95,6 @@
 
     gameRoom.onMessage("paddle_hit", (data) => {
       console.log(`🏓 Paddle hit by ${data.player} on ${data.side} side`);
-      // Add visual/audio feedback here
     });
 
     // Chat messages
@@ -101,7 +102,7 @@
       const message = {
         id: `${data.timestamp}_${Math.random()}`,
         username: data.username,
-        message: data.message,
+        message: data.message, // This should match what server sends
         timestamp: data.timestamp,
         isOwn: data.username === (ownPlayer?.username || "")
       };
@@ -109,17 +110,22 @@
       chatMessages = [...chatMessages, message];
     });
 
-    // State synchronization
+    // Simplified state synchronization
     gameRoom.onStateChange((state) => {
       updateFromState(state);
     });
   }
 
   function updateFromState(state) {
-    gamePhase = state.gamePhase || "waiting";
+    if (!state) return;
+    
+    // Update game phase
+    if (state.gamePhase !== undefined) {
+      gamePhase = state.gamePhase;
+    }
     
     // Update players array
-    if (state.players) {
+    if (state.players && state.players.size > 0) {
       players = Array.from(state.players.entries()).map(([sessionId, player]) => ({
         sessionId,
         username: player.username,
@@ -135,8 +141,10 @@
     }
 
     // Update game objects if scene exists
-    if (gameScene && state.ball) {
-      updateBallPosition(state.ball);
+    if (gameScene) {
+      if (state.ball && state.ball.x !== undefined) {
+        updateBallPosition(state.ball);
+      }
       updatePaddlePositions();
       updateScore();
     }
@@ -169,6 +177,7 @@
           const graphics = this.add.graphics();
           graphics.lineStyle(2, 0x7C3AED);
           graphics.strokeRect(0, 0, 800, 600);
+          console.log("✅ Game border created");
           
           // Create center line
           graphics.setDefaultStyles({
@@ -181,13 +190,16 @@
           for (let y = 0; y < 600; y += 20) {
             graphics.lineBetween(400, y, 400, y + 10);
           }
+          console.log("✅ Center line created");
           
           // Create paddles
           leftPaddle = this.add.rectangle(50, 300, 20, 80, 0xA78BFA);
           rightPaddle = this.add.rectangle(750, 300, 20, 80, 0xA78BFA);
+          console.log("✅ Paddles created:", leftPaddle, rightPaddle);
           
           // Create ball
           ball = this.add.circle(400, 300, 8, 0xFFFFFF);
+          console.log("✅ Ball created:", ball);
           
           // Create score text
           scoreText.left = this.add.text(150, 50, "0", {
@@ -201,6 +213,7 @@
             fill: "#A78BFA",
             fontFamily: "Arial"
           }).setOrigin(0.5);
+          console.log("✅ Score text created:", scoreText);
           
           // Add labels
           this.add.text(150, 100, "Player 1", {
@@ -214,6 +227,7 @@
             fill: "#9CA3AF", 
             fontFamily: "Arial"
           }).setOrigin(0.5);
+          console.log("✅ Player labels created");
           
           // Setup input
           cursors = this.input.keyboard.createCursorKeys();
@@ -264,12 +278,17 @@
       // Clamp to bounds
       targetY = Math.max(40, Math.min(560, targetY));
       
-      gameRoom.send("paddle_move", { paddleY: targetY });
+      // Send to server
+      try {
+        gameRoom.send("paddle_move", { paddleY: targetY });
+      } catch (err) {
+        console.error("Error sending paddle move:", err);
+      }
     }
   }
 
   function updateBallPosition(ballState) {
-    if (ball) {
+    if (ball && ballState) {
       ball.x = ballState.x;
       ball.y = ballState.y;
     }
@@ -485,7 +504,7 @@
   </div>
 
   <!-- Chat Panel -->
-  <div class="w-80 border-l border-white/10 bg-black/10">
+  <div class="w-1/3 border-l border-white/10 bg-black/10">
     <Chat 
       messages={chatMessages}
       onSendMessage={handleChatMessage}

@@ -1,3 +1,4 @@
+// BaseGameRoom.js - Enhanced Framework with Database Integration
 const { Room } = require("colyseus");
 const { Schema, MapSchema } = require("@colyseus/schema");
 
@@ -63,22 +64,54 @@ class BaseGameRoom extends Room {
   }
 
   setupMessageHandlers() {
+    console.log("Setting up base message handlers");
+
+    // Ready state handling
     this.onMessage("ready", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (player && this.state.gamePhase === "waiting") {
         player.ready = !player.ready;
+        console.log(`Player ${player.username} ready: ${player.ready}`);
         this.checkReadyState();
       }
     });
 
+    // Chat functionality - built into base class
+    this.onMessage("chat_message", (client, message) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player) {
+        console.log(`Player not found for chat message from ${client.sessionId}`);
+        return;
+      }
+
+      if (message && message.text) {
+        console.log(`Chat message from ${player.username}: ${message.text}`);
+        this.broadcast("chat_message", {
+          username: player.username,
+          message: message.text,
+          timestamp: Date.now()
+        });
+      } else {
+        console.log(`Invalid chat message from ${player.username}:`, message);
+      }
+    });
+
+    // Game restart
     this.onMessage("restart", (client) => {
       if (this.state.gamePhase === "finished") {
         this.resetGame();
       }
     });
+
+    // Allow subclasses to add additional message handlers
+    this.setupGameSpecificHandlers();
+
+    console.log("Base message handlers setup complete");
   }
 
   onJoin(client, options) {
+    console.log(`Player ${client.sessionId} joining ${this.constructor.name}`);
+    
     const player = this.createPlayer();
     
     // Set username and userId from options
@@ -329,6 +362,10 @@ class BaseGameRoom extends Room {
   // Abstract methods to be implemented by subclasses
   initializeGame() {
     // Override in subclass
+  }
+
+  setupGameSpecificHandlers() {
+    // Override in subclass - empty by default
   }
 
   createPlayer() {
