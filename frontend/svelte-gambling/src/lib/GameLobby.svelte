@@ -1,15 +1,15 @@
 <script>
   import { onMount, onDestroy } from "svelte";
-  import PongGame from "./PongGame.svelte"; // Import PongGame instead of BalanceGame
-  import Chat from "./Chat.svelte";
   
-  export let gameType = "pong"; // Default to pong now
+  export let gameType = "pong";
   export let onBack;
+  export let onGameStart;
+  export let onChatMessage; // Pass chat messages to parent
+  export let onChatConnected; // Pass connection status to parent
+  export let onChatHandlerReady; // Pass chat handler to parent
   
   let client = null;
   let lobbyRoom = null;
-  let gameRoom = null;
-  let currentView = "lobby"; // "lobby" | "game"
   
   // Lobby state
   let players = [];
@@ -19,10 +19,7 @@
   let connecting = false;
   let error = null;
   
-  // Chat state - simplified for unified chat
-  let chatMessages = [];
-  
-  // Game info - updated for Pong
+  // Game info
   const gameInfo = {
     pong: {
       name: "Pong",
@@ -44,17 +41,25 @@
   });
   
   function cleanup() {
-    if (gameRoom) {
-      gameRoom.leave();
-      gameRoom = null;
-    }
+    console.log("🧹 Cleaning up lobby connection...");
     
     if (lobbyRoom) {
-      lobbyRoom.leave();
+      try {
+        lobbyRoom.leave();
+      } catch (err) {
+        console.warn("Error leaving lobby room:", err);
+      }
       lobbyRoom = null;
     }
     
-    client = null;
+    if (client) {
+      client = null;
+    }
+    
+    // Notify parent of disconnection
+    if (onChatConnected) {
+      onChatConnected(false);
+    }
   }
   
   async function connectToGameLobby() {
@@ -68,7 +73,7 @@
       const user = JSON.parse(localStorage.getItem("user") || "{}");
       const username = user.username || `Player${Date.now().toString().slice(-4)}`;
       
-      console.log(`🎮 Connecting directly to ${gameType}_lobby as ${username}...`);
+      console.log(`🎮 Connecting to ${gameType}_lobby as ${username}...`);
       
       // Connect directly to the game-specific lobby
       lobbyRoom = await client.joinOrCreate(`${gameType}_lobby`, {
@@ -79,21 +84,31 @@
       setupLobbyHandlers();
       connecting = false;
       
+      // Notify parent of successful connection
+      if (onChatConnected) {
+        onChatConnected(true);
+      }
+      
+      // Pass chat handler to parent
+      if (onChatHandlerReady) {
+        onChatHandlerReady(handleChatInput);
+      }
+      
       console.log("✅ Connected to game lobby successfully");
       
     } catch (err) {
       console.error("❌ Failed to connect to game lobby:", err);
       error = `Failed to connect to ${gameType} lobby. Make sure the Colyseus server is running on port 2567.`;
       connecting = false;
+      
+      // Notify parent of connection failure
+      if (onChatConnected) {
+        onChatConnected(false);
+      }
     }
   }
   
   function setupLobbyHandlers() {
-    // Handle lobby info
-    lobbyRoom.onMessage("lobby_info", (data) => {
-      console.log("📋 Lobby info:", data);
-    });
-    
     // Handle player joined message
     lobbyRoom.onMessage("player_joined", (data) => {
       console.log("👤 Player joined:", data);
@@ -102,10 +117,9 @@
       }
     });
     
-    // Handle lobby full message (for Pong)
+    // Handle lobby full message
     lobbyRoom.onMessage("lobby_full", (data) => {
       console.log("🏓 Lobby full:", data);
-      // Could show a notification here if desired
     });
     
     // Handle player ready state change
@@ -143,18 +157,20 @@
       countdown = 0;
     });
     
-    // Handle chat messages - simplified for unified chat
+    // Handle chat messages - pass to parent
     lobbyRoom.onMessage("chat_message", (data) => {
-      const message = {
-        id: `${data.timestamp}_${Math.random()}`,
-        username: data.username,
-        message: data.message,
-        timestamp: data.timestamp,
-        isOwn: data.username === (ownPlayer?.username || "")
-      };
+      console.log("💬 Lobby chat message received:", data);
       
-      chatMessages = [...chatMessages, message];
-      console.log("💬 Chat message:", message);
+      const user = JSON.parse(localStorage.getItem("user") || "{}");
+      
+      if (onChatMessage) {
+        onChatMessage({
+          username: data.username,
+          message: data.message,
+          timestamp: data.timestamp,
+          isOwn: data.username === user.username
+        });
+      }
     });
     
     // Handle state changes
@@ -164,43 +180,47 @@
     
     // Handle room errors
     lobbyRoom.onError((code, message) => {
-      console.error("❌ Room error:", code, message);
-      error = `Room error: ${message}`;
-    });
-    
-    // Handle disconnection
-    lobbyRoom.onLeave((code) => {
-      console.log("👋 Left lobby room with code:", code);
+      console.error("❌ Lobby room error:", code, message);
+      error = "Connection lost. Please try again.";
+      
+      // Notify parent of connection loss
+      if (onChatConnected) {
+        onChatConnected(false);
+      }
+      
+      setTimeout(() => {
+        connectToGameLobby();
+      }, 1000);
     });
   }
   
   function updateFromState(state) {
-    if (!state || !state.players) return;
-    
-    const user = JSON.parse(localStorage.getItem("user") || "{}");
-    const username = user.username || `Player${Date.now().toString().slice(-4)}`;
-    
-    players = Array.from(state.players.values()).map(player => ({
-      username: player.username,
-      ready: player.ready,
-      joinedAt: player.joinedAt,
-      isOwn: player.username === username
-    }));
-    
-    ownPlayer = players.find(p => p.isOwn) || null;
-    
-    console.log("🔄 Updated state:", {
-      playersCount: players.length,
-      ownPlayer: ownPlayer?.username,
-      gameStarting
-    });
+    // Update players array
+    if (state.players) {
+      players = Array.from(state.players.entries()).map(([sessionId, player]) => ({
+        sessionId,
+        username: player.username,
+        ready: player.ready,
+        joinedAt: player.joinedAt,
+        isOwn: sessionId === lobbyRoom.sessionId
+      }));
+
+      ownPlayer = players.find(p => p.isOwn) || null;
+    }
   }
   
   async function joinGame(roomId) {
     try {
-      console.log("🎮 Joining game room:", roomId);
-      gameRoom = await client.joinById(roomId);
-      currentView = "game";
+      console.log(`🎮 Joining game room: ${roomId}`);
+      
+      const gameRoom = await client.joinById(roomId);
+      console.log("✅ Joined game room successfully");
+      
+      // Don't cleanup lobby yet - let parent handle transition
+      // cleanup();
+      
+      // Pass the game room to parent component
+      onGameStart(gameRoom);
       
     } catch (err) {
       console.error("❌ Failed to join game:", err);
@@ -222,25 +242,20 @@
       }
     }
   }
-  
-  // Chat handler for unified chat component
-  function handleChatMessage(message) {
+
+  // Handle chat input from unified chat component
+  function handleChatInput(message) {
+    console.log("📤 Sending lobby chat message:", message);
+    
     if (lobbyRoom && !connecting) {
       try {
         lobbyRoom.send("chat_message", { text: message });
       } catch (err) {
-        console.error("Error sending chat message:", err);
+        console.error("❌ Error sending lobby chat message:", err);
       }
+    } else {
+      console.warn("⚠️ Cannot send message - not connected to lobby");
     }
-  }
-  
-  function handleBackFromGame() {
-    currentView = "lobby";
-    gameRoom = null;
-    
-    setTimeout(() => {
-      connectToGameLobby();
-    }, 500);
   }
   
   function handleBack() {
@@ -272,10 +287,6 @@
     </div>
   </div>
 
-{:else if currentView === "game"}
-  <!-- Game View -->
-  <PongGame {gameRoom} onBack={handleBackFromGame} />
-
 {:else}
   <!-- Lobby View -->
   <div class="game-container min-h-screen flex flex-col">
@@ -304,143 +315,122 @@
         </div>
         <div class="text-sm text-gray-400">
           {connecting ? "Connecting..." : 
-           gameStarting ? `Starting in ${countdown}s` :
-           players.length < (currentGameInfo?.minPlayers || 2) ? 
-           `Need ${(currentGameInfo?.minPlayers || 2) - players.length} more player${(currentGameInfo?.minPlayers || 2) - players.length === 1 ? '' : 's'}` :
-           players.filter(p => p.ready).length < players.length ? 
-           "Waiting for players to ready up" :
-           "Ready to start!"}
+           gameStarting ? `Starting in ${countdown}s...` : 
+           players.length === currentGameInfo?.maxPlayers ? "Lobby Full" : "Waiting for players..."}
         </div>
       </div>
     </div>
 
-    <!-- Main Content -->
-    <div class="flex flex-1 min-h-0">
-      <!-- Players Panel -->
-      <div class="w-2/3 flex flex-col">
-        <div class="p-4 border-b border-white/10 bg-black/10">
-          <div class="flex items-center justify-between">
-            <h3 class="font-semibold">Players</h3>
-            <div class="text-sm text-gray-400">
-              {players.filter(p => p.ready).length}/{players.length} Ready
+    <!-- Main Content Area -->
+    <div class="flex-1 p-6">
+      <!-- Game Starting Countdown -->
+      {#if gameStarting && countdown > 0}
+        <div class="text-center mb-6">
+          <div class="inline-flex items-center gap-3 px-6 py-4 bg-gradient-to-r from-green-500/20 to-blue-500/20 rounded-lg border border-green-500/30">
+            <div class="text-2xl animate-pulse">🚀</div>
+            <div>
+              <div class="text-xl font-bold text-green-400">Game Starting!</div>
+              <div class="text-lg">Get ready in {countdown} seconds...</div>
             </div>
           </div>
         </div>
+      {/if}
+
+      <!-- Players List -->
+      <div class="space-y-4 mb-8">
+        <h3 class="text-xl font-bold mb-4">Players in Lobby</h3>
         
-        <div class="flex-1 overflow-y-auto p-4">
-          <!-- Ready Button -->
-          {#if ownPlayer && !gameStarting}
-            <div class="mb-6 text-center">
-              <button 
-                class="btn {ownPlayer.ready ? 'btn-success' : 'btn-primary'} text-lg px-8 py-3 hover:scale-105 transition-transform"
-                on:click={toggleReady}
-                disabled={connecting}
-              >
-                {ownPlayer.ready ? "✓ Ready" : "🚀 Ready Up"}
-              </button>
-            </div>
-          {/if}
-          
-          <!-- Game Starting Countdown -->
-          {#if gameStarting}
-            <div class="mb-6 text-center">
-              <div class="text-4xl font-bold text-green-400 animate-pulse">
-                {countdown}
-              </div>
-              <div class="text-lg text-green-300">Game Starting...</div>
-            </div>
-          {/if}
-          
-          <!-- Special message for Pong 2-player requirement -->
-          {#if players.length === 1 && !connecting}
-            <div class="text-center text-blue-400 py-8 mb-4">
-              <div class="text-4xl mb-4">🏓</div>
-              <div class="text-lg font-semibold mb-2">Waiting for Opponent</div>
-              <div class="text-sm text-gray-400">Pong requires exactly 2 players</div>
-              <div class="text-xs text-gray-500 mt-2">Share this lobby with a friend!</div>
-            </div>
-          {/if}
-          
-          <!-- Players List -->
-          {#each players as player, index}
-            <div class="flex items-center justify-between p-3 mb-2 rounded-lg bg-white/5 border border-white/10 {player.isOwn ? 'ring-2 ring-purple-400/50' : ''}">
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-purple-400 to-blue-500 flex items-center justify-center text-white font-bold">
+        {#each players as player}
+          <div class="flex items-center justify-between p-4 bg-white/5 rounded-lg border border-white/10">
+            <div class="flex items-center gap-4">
+              <div class="w-12 h-12 rounded-full bg-gradient-to-br from-purple-400 to-blue-500 flex items-center justify-center">
+                <span class="text-xl font-bold text-white">
                   {player.username.charAt(0).toUpperCase()}
-                </div>
-                
-                <div>
-                  <div class="font-semibold flex items-center gap-2">
-                    {player.username}
-                    {#if player.isOwn}
-                      <span class="text-xs bg-purple-500/20 text-purple-300 px-2 py-1 rounded">You</span>
-                    {/if}
-                    <span class="text-xs bg-blue-500/20 text-blue-300 px-2 py-1 rounded">
-                      {index === 0 ? "Left Paddle" : "Right Paddle"}
-                    </span>
-                  </div>
-                  <div class="text-sm {player.ready ? 'text-green-400' : 'text-gray-400'}">
-                    {player.ready ? "Ready" : "Not Ready"}
-                  </div>
-                </div>
+                </span>
               </div>
               
-              <div class="text-lg">
-                {player.ready ? "✅" : "⏳"}
-              </div>
-            </div>
-          {/each}
-          
-          {#if players.length === 0 && !connecting}
-            <div class="text-center text-gray-400 py-8">
-              <div class="text-4xl mb-2">👥</div>
-              <div>Waiting for players...</div>
-            </div>
-          {/if}
-          
-          {#if connecting}
-            <div class="text-center text-gray-400 py-8">
-              <div class="w-8 h-8 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin mx-auto mb-2"></div>
-              <div>Connecting to lobby...</div>
-            </div>
-          {/if}
-          
-          <!-- Pong Game Rules -->
-          {#if players.length > 0 && !gameStarting}
-            <div class="mt-6 p-4 bg-gradient-to-r from-purple-500/10 to-blue-500/10 rounded-lg border border-purple-500/20">
-              <h4 class="font-bold text-purple-300 mb-3">🏓 How to Play Pong:</h4>
-              <div class="space-y-2 text-sm text-gray-300">
-                <div class="flex items-start gap-2">
-                  <span class="text-purple-400">•</span>
-                  <span>Use W/S keys or mouse to move your paddle</span>
+              <div>
+                <div class="flex items-center gap-2">
+                  <span class="font-bold text-white">{player.username}</span>
+                  {#if player.isOwn}
+                    <span class="text-xs px-2 py-1 bg-purple-500/30 text-purple-300 rounded-full">You</span>
+                  {/if}
                 </div>
-                <div class="flex items-start gap-2">
-                  <span class="text-purple-400">•</span>
-                  <span>Hit the ball to send it to your opponent</span>
+                <div class="text-sm text-gray-400">
+                  {gameType === "pong" ? 
+                    player.sessionId === players[0]?.sessionId ? "Left Paddle" : "Right Paddle"
+                    : "Player"}
                 </div>
-                <div class="flex items-start gap-2">
-                  <span class="text-purple-400">•</span>
-                  <span>First player to 5 points wins!</span>
-                </div>
-                <div class="flex items-start gap-2">
-                  <span class="text-purple-400">•</span>
-                  <span>Don't let the ball get past your paddle</span>
+                <div class="text-sm {player.ready ? 'text-green-400' : 'text-gray-400'}">
+                  {player.ready ? "Ready" : "Not Ready"}
                 </div>
               </div>
             </div>
-          {/if}
-        </div>
+            
+            <div class="text-lg">
+              {player.ready ? "✅" : "⏳"}
+            </div>
+          </div>
+        {/each}
+        
+        {#if players.length === 0 && !connecting}
+          <div class="text-center text-gray-400 py-8">
+            <div class="text-4xl mb-2">👥</div>
+            <div>Waiting for players...</div>
+          </div>
+        {/if}
+        
+        {#if connecting}
+          <div class="text-center text-gray-400 py-8">
+            <div class="w-8 h-8 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin mx-auto mb-2"></div>
+            <div>Connecting to lobby...</div>
+          </div>
+        {/if}
       </div>
 
-      <!-- Chat Panel -->
-      <div class="w-1/3 border-l border-white/10 bg-black/10">
-        <Chat 
-          messages={chatMessages}
-          onSendMessage={handleChatMessage}
-          disabled={!lobbyRoom || gameStarting || connecting}
-          placeholder="Chat with your opponent..."
-        />
-      </div>
+      <!-- Ready Button -->
+      {#if ownPlayer && !gameStarting}
+        <div class="text-center">
+          <button 
+            class="btn {ownPlayer.ready ? 'btn-secondary' : 'btn-primary'} text-lg px-8 py-3"
+            on:click={toggleReady}
+            disabled={connecting}
+          >
+            {ownPlayer.ready ? "❌ Not Ready" : "✅ Ready Up"}
+          </button>
+          
+          <p class="text-sm text-gray-400 mt-3">
+            {ownPlayer.ready 
+              ? "Waiting for other players to ready up..." 
+              : "Click ready when you're prepared to play!"}
+          </p>
+        </div>
+      {/if}
+
+      <!-- Game Rules -->
+      {#if players.length > 0 && !gameStarting}
+        <div class="mt-6 p-4 bg-gradient-to-r from-purple-500/10 to-blue-500/10 rounded-lg border border-purple-500/20">
+          <h4 class="font-bold text-purple-300 mb-3">🏓 How to Play Pong:</h4>
+          <div class="space-y-2 text-sm text-gray-300">
+            <div class="flex items-start gap-2">
+              <span class="text-purple-400">•</span>
+              <span>Use W/S keys or mouse to move your paddle</span>
+            </div>
+            <div class="flex items-start gap-2">
+              <span class="text-purple-400">•</span>
+              <span>Hit the ball to send it to your opponent</span>
+            </div>
+            <div class="flex items-start gap-2">
+              <span class="text-purple-400">•</span>
+              <span>First player to 5 points wins!</span>
+            </div>
+            <div class="flex items-start gap-2">
+              <span class="text-purple-400">•</span>
+              <span>Don't let the ball get past your paddle</span>
+            </div>
+          </div>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}

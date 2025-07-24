@@ -1,10 +1,10 @@
 <script>
   export let messages = [];
-  export let newMessage = "";
-  export let onSendMessage;
+  export let onSendMessage; // Direct callback from parent
   export let disabled = false;
   export let placeholder = "Type a message...";
   
+  let newMessage = "";
   let chatContainer;
   
   // Auto-scroll to bottom when new messages arrive
@@ -15,10 +15,15 @@
   }
   
   function handleSendMessage() {
-    if (newMessage.trim() && onSendMessage && !disabled) {
-      onSendMessage(newMessage.trim());
-      newMessage = "";
-    }
+    if (!newMessage.trim() || disabled || !onSendMessage) return;
+    
+    const message = newMessage.trim();
+    newMessage = "";
+    
+    console.log("📤 Chat component sending message:", message);
+    
+    // Call the parent's callback directly
+    onSendMessage(message);
   }
   
   function handleKeyPress(event) {
@@ -37,35 +42,40 @@
 </script>
 
 <div class="flex flex-col h-full">
-  <!-- Chat Header -->
-  <div class="p-4 border-b border-white/10">
-    <h3 class="font-semibold">Chat</h3>
-  </div>
-  
   <!-- Messages Container -->
   <div 
     class="flex-1 overflow-y-auto p-2 space-y-1" 
     bind:this={chatContainer}
   >
     {#each messages as message}
-      <div class="flex items-start gap-2 py-1 px-2 rounded hover:bg-white/5 transition-colors">
-        <!-- Username and Timestamp (Left) -->
-        <div class="flex-shrink-0 min-w-0 w-20">
-          <div class="text-xs font-medium text-purple-400 truncate">
-            {message.username}
-          </div>
-          <div class="text-xs text-gray-500 leading-none">
-            {formatTime(message.timestamp)}
-          </div>
-        </div>
-        
-        <!-- Message Content (Right) -->
-        <div class="flex-1 min-w-0">
-          <div class="text-sm text-gray-200 break-words leading-tight">
+      {#if message.isSystem}
+        <!-- System Messages -->
+        <div class="text-center py-1">
+          <span class="text-xs text-gray-500 italic">
             {message.message}
+          </span>
+        </div>
+      {:else}
+        <!-- Regular Chat Messages -->
+        <div class="flex items-start gap-2 py-1 px-2 rounded hover:bg-white/5 transition-colors {message.isOwn ? 'bg-purple-500/10' : ''}">
+          <!-- Username and Timestamp (Left) -->
+          <div class="flex-shrink-0 min-w-0 w-20">
+            <div class="text-xs font-medium {message.isOwn ? 'text-purple-300' : 'text-blue-300'} truncate">
+              {message.isOwn ? 'You' : message.username}
+            </div>
+            <div class="text-xs text-gray-500 leading-none">
+              {formatTime(message.timestamp)}
+            </div>
+          </div>
+          
+          <!-- Message Content (Right) -->
+          <div class="flex-1 min-w-0">
+            <div class="text-sm text-gray-200 break-words leading-tight">
+              {message.message}
+            </div>
           </div>
         </div>
-      </div>
+      {/if}
     {/each}
     
     {#if messages.length === 0}
@@ -83,18 +93,28 @@
       <input
         type="text"
         {placeholder}
-        class="input flex-1 text-sm py-2 px-3"
+        class="input flex-1 text-sm py-2 px-3 {disabled ? 'opacity-50' : ''}"
         bind:value={newMessage}
         on:keydown={handleKeyPress}
         {disabled}
       />
       <button 
-        class="btn btn-primary px-4 py-2 text-sm"
+        class="btn btn-primary px-4 py-2 text-sm {disabled ? 'opacity-50' : ''}"
         on:click={handleSendMessage}
-        disabled={!newMessage.trim() || disabled}
+        disabled={!newMessage.trim() || disabled || !onSendMessage}
       >
         Send
       </button>
     </div>
+    
+    {#if disabled}
+      <div class="text-xs text-gray-500 mt-1 text-center">
+        Chat unavailable - connection lost
+      </div>
+    {:else if !onSendMessage}
+      <div class="text-xs text-gray-500 mt-1 text-center">
+        Chat handler not ready
+      </div>
+    {/if}
   </div>
 </div>

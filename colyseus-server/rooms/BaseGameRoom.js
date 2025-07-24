@@ -63,6 +63,7 @@ class BaseGameRoom extends Room {
   }
 
   setupMessageHandlers() {
+    // Game control messages
     this.onMessage("ready", (client) => {
       const player = this.state.players.get(client.sessionId);
       if (player && this.state.gamePhase === "waiting") {
@@ -76,6 +77,35 @@ class BaseGameRoom extends Room {
         this.resetGame();
       }
     });
+
+    // Chat message handler - now all games have chat support!
+    this.onMessage("chat_message", (client, message) => {
+      const player = this.state.players.get(client.sessionId);
+      if (!player) {
+        console.log(`Player not found for chat message from ${client.sessionId}`);
+        return;
+      }
+
+      if (message && message.text && message.text.trim()) {
+        console.log(`Game chat message from ${player.username}: ${message.text}`);
+        
+        this.broadcast("chat_message", {
+          username: player.username,
+          message: message.text.trim(),
+          timestamp: Date.now()
+        });
+      } else {
+        console.log(`Invalid chat message from ${player.username}:`, message);
+      }
+    });
+
+    // Allow subclasses to add more message handlers
+    this.setupCustomMessageHandlers();
+  }
+
+  // Override this in subclasses to add game-specific message handlers
+  setupCustomMessageHandlers() {
+    // Override in subclass if needed
   }
 
   onJoin(client, options) {
@@ -97,6 +127,14 @@ class BaseGameRoom extends Room {
     
     this.state.players.set(client.sessionId, player);
     console.log(`Player ${player.username} (${client.sessionId}) joined game. Total: ${this.state.players.size}`);
+    
+    // Send game info to the joining player
+    client.send("game_info", {
+      message: `Welcome to the game, ${player.username}!`,
+      gamePhase: this.state.gamePhase,
+      playerCount: this.state.players.size,
+      minPlayers: this.minPlayers
+    });
     
     this.onPlayerJoin(client, player);
     

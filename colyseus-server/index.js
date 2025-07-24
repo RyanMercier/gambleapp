@@ -316,33 +316,63 @@ class GameLobbyRoom extends Room {
 // Global Chat Room
 class GlobalChatRoom extends Room {
   onCreate() {
-    console.log("Global chat room created");
+    console.log("🌍 Global chat room created");
     this.maxClients = 100;
+    
+    // Store usernames for each client
+    this.usernames = new Map();
+    
+    // Set up message handlers in onCreate
+    this.setupMessageHandlers();
+  }
+  
+  setupMessageHandlers() {
+    console.log("🔧 Setting up global chat message handlers");
+    
+    // This is the missing handler that's causing the error!
+    this.onMessage("chat_message", (client, message) => {
+      console.log("💬 Received chat_message in GlobalChatRoom:", message);
+      
+      if (message && message.text && message.text.trim()) {
+        const username = this.usernames.get(client.sessionId) || `Player${client.sessionId.slice(0, 4)}`;
+        
+        console.log(`📤 Broadcasting global chat message from ${username}: ${message.text}`);
+        
+        this.broadcast("chat_message", {
+          username: username,
+          message: message.text.trim(),
+          timestamp: Date.now()
+        });
+      } else {
+        console.log("❌ Invalid chat message format:", message);
+      }
+    });
+    
+    console.log("✅ Global chat message handlers set up successfully");
   }
   
   onJoin(client, options) {
     const username = options.username || `Player${client.sessionId.slice(0, 4)}`;
-    console.log(`${username} joined global chat`);
     
-    // Notify others
+    // Store username for this client
+    this.usernames.set(client.sessionId, username);
+    
+    console.log(`👤 ${username} joined global chat (${client.sessionId})`);
+    
+    // Notify others that user joined
     this.broadcast("user_joined", { username }, { except: client });
   }
   
   onLeave(client, consented) {
-    console.log(`Client left global chat`);
-    // Note: We don't have username stored, so we can't broadcast leave message with name
-  }
-  
-  onMessage(client, message) {
-    if (message.text && message.text.trim()) {
-      // In a real app, you'd want to store username on client join
-      // For now, we'll just broadcast the message
-      this.broadcast("chat_message", {
-        username: `Player${client.sessionId.slice(0, 4)}`, // Fallback username
-        message: message.text.trim(),
-        timestamp: Date.now()
-      });
-    }
+    const username = this.usernames.get(client.sessionId) || "Unknown Player";
+    
+    console.log(`👋 ${username} left global chat (${client.sessionId})`);
+    
+    // Notify others that user left
+    this.broadcast("user_left", { username });
+    
+    // Clean up stored username
+    this.usernames.delete(client.sessionId);
   }
 }
 
@@ -356,9 +386,6 @@ try {
 } catch (error) {
   console.error("❌ Failed to register rooms:", error);
 }
-
-// Legacy room definitions for backwards compatibility
-gameServer.define("balance_lobby", GameLobbyRoom); // Keep for now, but redirect to pong
 
 // Start the server
 const PORT = process.env.PORT || 2567;

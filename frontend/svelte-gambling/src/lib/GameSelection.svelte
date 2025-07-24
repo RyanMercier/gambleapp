@@ -1,16 +1,16 @@
 <script>
   import { onMount, onDestroy } from "svelte";
-  import GameLobby from "./GameLobby.svelte";
-  import Chat from "./Chat.svelte";
   
-  let selectedGame = null;
+  export let onGameSelect;
+  export let onChatMessage; // Pass chat messages to parent
+  export let onChatConnected; // Pass connection status to parent
+  export let onChatHandlerReady; // Pass chat handler to parent
+  
   let connecting = false;
-  let error = null;
   
-  // Global chat state - simplified for unified chat
+  // Global chat state
   let globalChatClient = null;
   let globalChatRoom = null;
-  let globalMessages = [];
   let connectedToGlobalChat = false;
 
   const gameInfo = {
@@ -19,26 +19,23 @@
       description: "Classic arcade action! Control your paddle and score against your opponent.",
       icon: "🏓",
       minPlayers: 2,
-      maxPlayers: 2, // Exactly 2 players for Pong
+      maxPlayers: 2,
       difficulty: "Easy",
       estimatedTime: "2-5 minutes"
     }
   };
 
-  // Available games
+  // Available games (only pong for now, balance game was removed)
   const availableGames = Object.keys(gameInfo);
-  
+
   onMount(async () => {
     await connectToGlobalChat();
   });
   
   onDestroy(() => {
-    if (globalChatRoom) {
-      globalChatRoom.leave();
-    }
-    globalChatClient = null;
+    disconnectFromGlobalChat();
   });
-  
+
   async function connectToGlobalChat() {
     try {
       const Colyseus = await import("colyseus.js");
@@ -46,6 +43,8 @@
       
       const user = JSON.parse(localStorage.getItem("user") || "{}");
       const username = user.username || `Player${Date.now().toString().slice(-4)}`;
+      
+      console.log("💬 Connecting to global chat...");
       
       // Connect to global chat room
       globalChatRoom = await globalChatClient.joinOrCreate("global_chat", {
@@ -55,142 +54,207 @@
       setupGlobalChatHandlers();
       connectedToGlobalChat = true;
       
+      // Notify parent of connection status
+      if (onChatConnected) {
+        onChatConnected(true);
+      }
+      
+      // Pass chat handler to parent
+      if (onChatHandlerReady) {
+        onChatHandlerReady(handleChatInput);
+      }
+      
       console.log("✅ Connected to global chat");
       
     } catch (err) {
-      console.error("Failed to connect to global chat:", err);
-      // Don't show error for global chat, it's optional
+      console.error("❌ Failed to connect to global chat:", err);
+      connectedToGlobalChat = false;
+      
+      // Notify parent of connection failure
+      if (onChatConnected) {
+        onChatConnected(false);
+      }
     }
   }
   
   function setupGlobalChatHandlers() {
+    if (!globalChatRoom) return;
+
     globalChatRoom.onMessage("chat_message", (data) => {
-      addGlobalMessage(data.username, data.message, data.timestamp);
+      console.log("💬 Global chat message received:", data);
+      
+      const user = JSON.parse(localStorage.getItem("user") || "{}");
+      
+      // Pass message to parent
+      if (onChatMessage) {
+        onChatMessage({
+          username: data.username,
+          message: data.message,
+          timestamp: data.timestamp,
+          isOwn: data.username === user.username
+        });
+      }
     });
     
     globalChatRoom.onMessage("user_joined", (data) => {
-      addGlobalMessage("System", `${data.username} joined the lobby`, Date.now(), true);
+      console.log("👤 User joined global chat:", data);
+      
+      if (onChatMessage) {
+        onChatMessage({
+          username: "System",
+          message: `${data.username} joined the lobby`,
+          timestamp: Date.now(),
+          isSystem: true,
+          isOwn: false
+        });
+      }
     });
     
     globalChatRoom.onMessage("user_left", (data) => {
-      addGlobalMessage("System", `${data.username} left the lobby`, Date.now(), true);
+      console.log("👋 User left global chat:", data);
+      
+      if (onChatMessage) {
+        onChatMessage({
+          username: "System", 
+          message: `${data.username} left the lobby`,
+          timestamp: Date.now(),
+          isSystem: true,
+          isOwn: false
+        });
+      }
+    });
+
+    globalChatRoom.onError((code, message) => {
+      console.error("❌ Global chat room error:", code, message);
+      connectedToGlobalChat = false;
+      
+      if (onChatConnected) {
+        onChatConnected(false);
+      }
     });
   }
-  
-  function addGlobalMessage(username, message, timestamp, isSystem = false) {
-    const user = JSON.parse(localStorage.getItem("user") || "{}");
-    const msg = {
-      id: `${timestamp}_${Math.random()}`,
-      username: username,
-      message: message,
-      timestamp: timestamp,
-      isOwn: username === user.username,
-      isSystem: isSystem
-    };
+
+  function disconnectFromGlobalChat() {
+    console.log("🔌 Disconnecting from global chat...");
     
-    globalMessages = [...globalMessages, msg];
+    if (globalChatRoom) {
+      try {
+        globalChatRoom.leave();
+      } catch (err) {
+        console.warn("Error leaving global chat room:", err);
+      }
+      globalChatRoom = null;
+    }
     
-    // Keep only last 100 messages
-    if (globalMessages.length > 100) {
-      globalMessages = globalMessages.slice(-100);
+    if (globalChatClient) {
+      globalChatClient = null;
+    }
+    
+    connectedToGlobalChat = false;
+    
+    // Notify parent of disconnection
+    if (onChatConnected) {
+      onChatConnected(false);
     }
   }
-  
-  // Chat handler for unified chat component
-  function handleGlobalChatMessage(message) {
+
+  // Handle chat input from unified chat component
+  function handleChatInput(message) {
+    console.log("📤 Sending global chat message:", message);
+    
     if (globalChatRoom && connectedToGlobalChat) {
       try {
         globalChatRoom.send("chat_message", { text: message });
       } catch (err) {
-        console.error("Error sending global chat message:", err);
+        console.error("❌ Error sending global chat message:", err);
       }
+    } else {
+      console.warn("⚠️ Cannot send message - not connected to global chat");
     }
   }
 
   function selectGame(gameType) {
     if (connecting) return;
     console.log(`🎮 Selected game: ${gameType}`);
-    selectedGame = gameType;
-  }
-
-  function backToSelection() {
-    console.log("🔙 Back to game selection");
-    selectedGame = null;
-    error = null;
+    
+    // Disconnect from global chat before leaving (with small delay to prevent WebSocket errors)
+    setTimeout(() => {
+      disconnectFromGlobalChat();
+    }, 100);
+    
+    onGameSelect(gameType);
   }
 </script>
 
-{#if selectedGame}
-  <GameLobby gameType={selectedGame} onBack={backToSelection} />
-{:else}
-  <!-- Game Selection Menu -->
-  <div class="min-h-screen flex">
-    <!-- Main Content -->
-    <div class="flex-1 flex flex-col">
-      <!-- Header -->
-      <div class="text-center py-8 px-6">
-        <h1 class="text-4xl font-bold mb-4 text-white">
-          🎮 Choose Your Game
-        </h1>
-        <p class="text-xl text-gray-300">
-          Select a game to join and compete with players from around the world
-        </p>
-      </div>
+<!-- Game Selection Menu -->
+<div class="min-h-screen flex flex-col">
+  <!-- Header -->
+  <div class="text-center py-8 px-6">
+    <h1 class="text-4xl font-bold mb-4 text-white">
+      🎮 Choose Your Game
+    </h1>
+    <p class="text-xl text-gray-300">
+      Select a game to join and compete with players from around the world
+    </p>
+  </div>
 
-      <!-- Game Grid -->
-      <div class="flex-1 px-6 pb-8 overflow-y-auto">
-        <div class="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-6">
-          {#each availableGames as gameType}
-            {@const game = gameInfo[gameType]}
-            <button 
-              class="card bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-purple-500 transition-all p-6 text-left group hover:scale-105 transform"
-              on:click={() => selectGame(gameType)}
-            >
-              <!-- Game Icon -->
-              <div class="text-5xl mb-4 group-hover:animate-bounce">{game.icon}</div>
-              
-              <!-- Game Info -->
-              <h3 class="text-xl font-bold text-white mb-2">{game.name}</h3>
-              <p class="text-gray-300 text-sm mb-4">{game.description}</p>
-              
-              <!-- Game Stats -->
-              <div class="space-y-1 text-sm">
-                <div class="flex justify-between">
-                  <span class="text-gray-400">Players:</span>
-                  <span class="text-blue-400">
-                    {#if game.minPlayers === game.maxPlayers}
-                      {game.maxPlayers}
-                    {:else}
-                      {game.minPlayers}-{game.maxPlayers}
-                    {/if}
-                  </span>
-                </div>
-                <div class="flex justify-between">
-                  <span class="text-gray-400">Duration:</span>
-                  <span class="text-green-400">{game.estimatedTime}</span>
-                </div>
-                <div class="flex justify-between">
-                  <span class="text-gray-400">Difficulty:</span>
-                  <span class="{game.difficulty === 'Easy' ? 'text-green-400' : game.difficulty === 'Medium' ? 'text-yellow-400' : 'text-red-400'}">
-                    {game.difficulty}
-                  </span>
-                </div>
+  <!-- Game Grid -->
+  <div class="flex-1 px-6 pb-8">
+    <div class="max-w-4xl mx-auto">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <!-- Available Games -->
+        {#each availableGames as gameType}
+          <div class="card card-hover cursor-pointer group" on:click={() => selectGame(gameType)}>
+            <div class="text-center">
+              <div class="text-6xl mb-4 group-hover:scale-110 transition-transform duration-300">
+                {gameInfo[gameType].icon}
               </div>
+              <h3 class="text-2xl font-bold mb-2 text-white">
+                {gameInfo[gameType].name}
+              </h3>
+              <p class="text-gray-300 mb-6 leading-relaxed">
+                {gameInfo[gameType].description}
+              </p>
               
-              <!-- Special badge for 2-player games -->
-              {#if game.maxPlayers === 2}
-                <div class="mt-3 inline-flex items-center px-2 py-1 rounded-full text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  👥 1v1 Duel
+              <div class="space-y-3">
+                <!-- Game Stats -->
+                <div class="flex justify-between items-center text-sm">
+                  <span class="text-gray-400">Players:</span>
+                  <span class="text-white font-semibold">
+                    {gameInfo[gameType].minPlayers === gameInfo[gameType].maxPlayers 
+                      ? gameInfo[gameType].maxPlayers 
+                      : `${gameInfo[gameType].minPlayers}-${gameInfo[gameType].maxPlayers}`}
+                  </span>
                 </div>
-              {/if}
-            </button>
-          {/each}
-          
-          <!-- Coming Soon Card -->
-          <div class="card bg-gray-900 border border-gray-600 p-6 text-left opacity-60">
-            <div class="text-5xl mb-4">🚧</div>
-            <h3 class="text-xl font-bold text-gray-400 mb-2">More Games Coming Soon!</h3>
-            <p class="text-gray-500 text-sm mb-4">We're working on exciting new games. Stay tuned!</p>
+                
+                <div class="flex justify-between items-center text-sm">
+                  <span class="text-gray-400">Difficulty:</span>
+                  <span class="text-green-400 font-semibold">{gameInfo[gameType].difficulty}</span>
+                </div>
+                
+                <div class="flex justify-between items-center text-sm">
+                  <span class="text-gray-400">Duration:</span>
+                  <span class="text-blue-400 font-semibold">{gameInfo[gameType].estimatedTime}</span>
+                </div>
+                
+                <!-- Play Button -->
+                <button class="w-full btn btn-primary mt-4 group-hover:scale-105 transition-transform duration-300">
+                  <span class="text-lg">🚀</span>
+                  Play Now
+                </button>
+              </div>
+            </div>
+          </div>
+        {/each}
+        
+        <!-- Coming Soon Games -->
+        <div class="card opacity-50 cursor-not-allowed">
+          <div class="text-center">
+            <div class="text-6xl mb-4">🎯</div>
+            <h3 class="text-2xl font-bold mb-2 text-white">More Games</h3>
+            <p class="text-gray-300 mb-6">
+              Additional skill-based games coming soon! Stay tuned!
+            </p>
             <div class="space-y-1 text-sm">
               <div class="flex justify-between">
                 <span class="text-gray-600">Status:</span>
@@ -201,31 +265,5 @@
         </div>
       </div>
     </div>
-
-    <!-- Global Chat Panel -->
-    <div class="w-1/3 border-l border-white/10 bg-black/10 flex flex-col max-h-screen">
-      <div class="p-3 border-b border-white/10 bg-black/20 flex-shrink-0">
-        <h3 class="font-semibold text-sm flex items-center gap-2">
-          🌍 Global Chat
-          {#if connectedToGlobalChat}
-            <span class="w-2 h-2 bg-green-400 rounded-full"></span>
-          {:else}
-            <span class="w-2 h-2 bg-red-400 rounded-full"></span>
-          {/if}
-        </h3>
-        <p class="text-xs text-gray-400 mt-1">
-          Chat with players from all games
-        </p>
-      </div>
-      
-      <div class="flex-1 min-h-0">
-        <Chat 
-          messages={globalMessages}
-          onSendMessage={handleGlobalChatMessage}
-          disabled={!connectedToGlobalChat}
-          placeholder="Chat with everyone..."
-        />
-      </div>
-    </div>
   </div>
-{/if}
+</div>
