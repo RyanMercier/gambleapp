@@ -1,23 +1,28 @@
+// PongRoom.js - Pong game implementation using the base framework
 const { BaseGameRoom, BasePlayer, BaseGameState } = require("./BaseGameRoom");
 const { Schema, MapSchema } = require("@colyseus/schema");
 
-// Extend BasePlayer for Pong-specific properties
+console.log("BaseGameRoom import:", typeof BaseGameRoom);
+console.log("BasePlayer import:", typeof BasePlayer);
+console.log("BaseGameState import:", typeof BaseGameState);
+
 class PongPlayer extends BasePlayer {
   constructor() {
     super();
     this.paddleY = 300;
     this.paddleHeight = 80;
-    this.side = "left";
+    this.paddleSpeed = 8;
+    this.side = "left"; // "left" or "right"
   }
 }
 PongPlayer.schema = {
   ...BasePlayer.schema,
   paddleY: "number",
   paddleHeight: "number",
+  paddleSpeed: "number",
   side: "string"
 };
 
-// Ball schema
 class Ball extends Schema {
   constructor() {
     super();
@@ -38,7 +43,6 @@ Ball.schema = {
   radius: "number"
 };
 
-// Extend BaseGameState for Pong-specific properties
 class PongGameState extends BaseGameState {
   constructor() {
     super();
@@ -66,81 +70,88 @@ class PongRoom extends BaseGameRoom {
   }
 
   onCreate(options) {
-    console.log("Creating PongRoom with options:", options);
+    console.log("PongRoom onCreate called with options:", options);
     
-    // Use Pong-specific state
     this.setState(new PongGameState());
     
-    // Set pending players
+    // Add players from lobby if provided
     if (options.players) {
       this.pendingPlayers = options.players;
+      console.log("Pending players set:", this.pendingPlayers);
     }
     
-    // Call parent setup
     this.setupMessageHandlers();
     this.initializeGame();
     
-    console.log("PongRoom created successfully");
+    console.log("PongRoom created successfully with room ID:", this.roomId);
   }
 
-  // Override to return Pong-specific player
-  createPlayer() {
-    return new PongPlayer();
-  }
-
-  // Override to add Pong-specific message handlers
-  setupGameSpecificHandlers() {
-    console.log("Setting up Pong-specific handlers");
+  initializeGame() {
+    console.log("Initializing Pong Game");
     
     // Handle paddle movement
     this.onMessage("paddle_move", (client, data) => {
       const player = this.state.players.get(client.sessionId);
       if (player && player.alive && this.state.gameStarted) {
+        // Clamp paddle position to game bounds
         const minY = player.paddleHeight / 2;
         const maxY = this.state.gameHeight - player.paddleHeight / 2;
         player.paddleY = Math.max(minY, Math.min(maxY, data.paddleY));
       }
     });
-  }
-
-  // Override to set up Pong players properly
-  onPlayerJoin(client, player) {
-    // Assign sides based on join order
-    const playerCount = this.state.players.size;
-    player.side = playerCount === 1 ? "left" : "right";
-    player.x = player.side === "left" ? 50 : this.state.gameWidth - 50;
-    player.paddleY = this.state.gameHeight / 2;
-    player.paddleHeight = 80;
     
-    console.log(`Player ${player.username} assigned to ${player.side} side`);
-    
-    // Send game info
-    client.send("game_info", {
-      message: `Welcome to Pong! You are the ${player.side} player.`,
-      gameRules: [
-        "Use W/S keys or mouse to move your paddle",
-        "Hit the ball to send it to your opponent", 
-        "First to 5 points wins!",
-        "Don't let the ball get past your paddle!"
-      ],
-      side: player.side
+    // Handle ready state
+    this.onMessage("ready", (client) => {
+      const player = this.state.players.get(client.sessionId);
+      if (player && this.state.gamePhase === "waiting") {
+        player.ready = !player.ready;
+        this.checkReadyState();
+      }
     });
   }
 
-  // Override to reset paddle positions
+  createPlayer() {
+    return new PongPlayer();
+  }
+
+  onJoin(client, options) {
+    super.onJoin(client, options);
+    
+    const player = this.state.players.get(client.sessionId);
+    if (player) {
+      // Assign sides based on join order
+      const playerCount = this.state.players.size;
+      player.side = playerCount === 1 ? "left" : "right";
+      player.x = player.side === "left" ? 50 : this.state.gameWidth - 50;
+      player.paddleY = this.state.gameHeight / 2;
+      
+      client.send("game_info", {
+        message: `Welcome to Pong! You are the ${player.side} player.`,
+        gameRules: [
+          "Use W/S keys or mouse to move your paddle",
+          "Hit the ball to send it to your opponent", 
+          "First to 5 points wins!",
+          "Don't let the ball get past your paddle!"
+        ],
+        side: player.side,
+        minPlayers: this.minPlayers,
+        maxPlayers: this.maxClients
+      });
+    }
+  }
+
   resetPlayerPosition(player) {
     player.paddleY = this.state.gameHeight / 2;
     player.x = player.side === "left" ? 50 : this.state.gameWidth - 50;
   }
 
-  // Override to start Pong physics
   onGameStart() {
-    console.log("Starting Pong physics");
+    console.log("Pong game started");
     
     // Reset ball to center
     this.resetBall();
     
-    // Start game physics at 60fps
+    // Start game physics updates at 60fps
     this.gameUpdateInterval = setInterval(() => {
       this.updateGamePhysics();
     }, 1000 / 60);
@@ -268,10 +279,10 @@ class PongRoom extends BaseGameRoom {
     }, 1500);
   }
 
-  // Override to clean up Pong-specific intervals
   onGameEnd(winner) {
     console.log("Pong game ended");
     
+    // Clean up intervals
     if (this.gameUpdateInterval) {
       clearInterval(this.gameUpdateInterval);
       this.gameUpdateInterval = null;
@@ -283,7 +294,6 @@ class PongRoom extends BaseGameRoom {
     }
   }
 
-  // Override to reset Pong-specific state
   onGameReset() {
     console.log("Pong game reset");
     
@@ -318,7 +328,6 @@ class PongRoom extends BaseGameRoom {
       clearTimeout(this.ballResetTimer);
     }
     
-    // Call parent dispose
     super.onDispose();
   }
 }
