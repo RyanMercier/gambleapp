@@ -2,10 +2,6 @@
   import { goto } from '$app/navigation';
   import { user } from '$lib/stores';
 
-  function startGame() {
-    goto('/game');
-  }
-
   function handleGetStarted() {
     if ($user) {
       goto('/game');
@@ -29,26 +25,19 @@
       <h1 class="text-6xl md:text-8xl font-bold mb-6 bg-gradient-to-r from-purple-400 via-blue-500 to-purple-600 bg-clip-text text-transparent">
         Gamble Royale
       </h1>
-      <p class="text-xl md:text-2xl text-gray-300 mb-8 max-w-2xl mx-auto leading-relaxed">
+      <p class="text-xl md:text-2xl text-gray-300 mb-12 max-w-2xl mx-auto leading-relaxed">
         The ultimate multiplayer gaming arena where skill meets strategy. 
         Compete with players worldwide in fast-paced skill games.
       </p>
     </div>
 
-    <!-- Action Buttons -->
-    <div class="flex flex-col sm:flex-row gap-4 justify-center items-center mb-12">
+    <!-- Single Action Button -->
+    <div class="flex justify-center items-center mb-16">
       <button 
         on:click={handleGetStarted} 
-        class="btn btn-primary text-lg px-8 py-4 text-white font-semibold bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 transform hover:scale-105 transition-all duration-200 shadow-2xl"
+        class="btn btn-primary text-xl px-12 py-6 text-white font-bold bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 transform hover:scale-105 transition-all duration-300 shadow-2xl border-2 border-purple-400/30 hover:border-purple-300/50"
       >
         🚀 Enter the Arena
-      </button>
-      
-      <button 
-        on:click={() => goto('/game')} 
-        class="btn btn-secondary text-lg px-8 py-4 border border-white/20 hover:bg-white/10"
-      >
-        🎮 Browse Games
       </button>
     </div>
 

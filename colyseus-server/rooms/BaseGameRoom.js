@@ -1,4 +1,3 @@
-// BaseGameRoom.js - Enhanced Framework with Database Integration
 const { Room } = require("colyseus");
 const { Schema, MapSchema } = require("@colyseus/schema");
 

@@ -1,28 +1,27 @@
 <script>
   import { onMount, onDestroy } from "svelte";
   import GameLobby from "./GameLobby.svelte";
+  import Chat from "./Chat.svelte";
   
   let selectedGame = null;
   let connecting = false;
   let error = null;
   
-  // Global chat state
+  // Global chat state - simplified for unified chat
   let globalChatClient = null;
   let globalChatRoom = null;
   let globalMessages = [];
-  let newGlobalMessage = "";
-  let globalChatContainer;
   let connectedToGlobalChat = false;
 
   const gameInfo = {
-    balance: {
-      name: "Balance Game",
-      description: "Keep your stick balanced while avoiding falling plates. Last player standing wins!",
-      icon: "🎯",
+    pong: {
+      name: "Pong",
+      description: "Classic arcade action! Control your paddle and score against your opponent.",
+      icon: "🏓",
       minPlayers: 2,
-      maxPlayers: 8,
-      difficulty: "Medium",
-      estimatedTime: "3-5 minutes"
+      maxPlayers: 2, // Exactly 2 players for Pong
+      difficulty: "Easy",
+      estimatedTime: "2-5 minutes"
     }
   };
 
@@ -95,27 +94,16 @@
     if (globalMessages.length > 100) {
       globalMessages = globalMessages.slice(-100);
     }
-    
-    // Auto-scroll
-    setTimeout(() => {
-      if (globalChatContainer) {
-        globalChatContainer.scrollTop = globalChatContainer.scrollHeight;
+  }
+  
+  // Chat handler for unified chat component
+  function handleGlobalChatMessage(message) {
+    if (globalChatRoom && connectedToGlobalChat) {
+      try {
+        globalChatRoom.send("chat_message", { text: message });
+      } catch (err) {
+        console.error("Error sending global chat message:", err);
       }
-    }, 10);
-  }
-  
-  function sendGlobalMessage() {
-    const message = newGlobalMessage.trim();
-    if (message && globalChatRoom && connectedToGlobalChat) {
-      globalChatRoom.send("chat_message", { text: message });
-      newGlobalMessage = "";
-    }
-  }
-  
-  function handleGlobalChatKeyPress(event) {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      sendGlobalMessage();
     }
   }
 
@@ -136,7 +124,7 @@
   <GameLobby gameType={selectedGame} onBack={backToSelection} />
 {:else}
   <!-- Game Selection Menu -->
-  <div class="h-full flex">
+  <div class="min-h-screen flex">
     <!-- Main Content -->
     <div class="flex-1 flex flex-col">
       <!-- Header -->
@@ -155,11 +143,11 @@
           {#each availableGames as gameType}
             {@const game = gameInfo[gameType]}
             <button 
-              class="card bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-purple-500 transition-all p-6 text-left"
+              class="card bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-purple-500 transition-all p-6 text-left group hover:scale-105 transform"
               on:click={() => selectGame(gameType)}
             >
               <!-- Game Icon -->
-              <div class="text-5xl mb-4">{game.icon}</div>
+              <div class="text-5xl mb-4 group-hover:animate-bounce">{game.icon}</div>
               
               <!-- Game Info -->
               <h3 class="text-xl font-bold text-white mb-2">{game.name}</h3>
@@ -169,7 +157,13 @@
               <div class="space-y-1 text-sm">
                 <div class="flex justify-between">
                   <span class="text-gray-400">Players:</span>
-                  <span class="text-blue-400">{game.minPlayers}-{game.maxPlayers}</span>
+                  <span class="text-blue-400">
+                    {#if game.minPlayers === game.maxPlayers}
+                      {game.maxPlayers}
+                    {:else}
+                      {game.minPlayers}-{game.maxPlayers}
+                    {/if}
+                  </span>
                 </div>
                 <div class="flex justify-between">
                   <span class="text-gray-400">Duration:</span>
@@ -182,16 +176,36 @@
                   </span>
                 </div>
               </div>
+              
+              <!-- Special badge for 2-player games -->
+              {#if game.maxPlayers === 2}
+                <div class="mt-3 inline-flex items-center px-2 py-1 rounded-full text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  👥 1v1 Duel
+                </div>
+              {/if}
             </button>
           {/each}
+          
+          <!-- Coming Soon Card -->
+          <div class="card bg-gray-900 border border-gray-600 p-6 text-left opacity-60">
+            <div class="text-5xl mb-4">🚧</div>
+            <h3 class="text-xl font-bold text-gray-400 mb-2">More Games Coming Soon!</h3>
+            <p class="text-gray-500 text-sm mb-4">We're working on exciting new games. Stay tuned!</p>
+            <div class="space-y-1 text-sm">
+              <div class="flex justify-between">
+                <span class="text-gray-600">Status:</span>
+                <span class="text-yellow-500">In Development</span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Global Chat Sidebar -->
-    <div class="w-80 chat-container">
-      <div class="chat-header">
-        <h3 class="font-semibold flex items-center gap-2">
+    <!-- Global Chat Panel -->
+    <div class="w-1/3 border-l border-white/10 bg-black/10 flex flex-col max-h-screen">
+      <div class="p-3 border-b border-white/10 bg-black/20 flex-shrink-0">
+        <h3 class="font-semibold text-sm flex items-center gap-2">
           🌍 Global Chat
           {#if connectedToGlobalChat}
             <span class="w-2 h-2 bg-green-400 rounded-full"></span>
@@ -199,59 +213,18 @@
             <span class="w-2 h-2 bg-red-400 rounded-full"></span>
           {/if}
         </h3>
-        <p class="text-xs text-gray-400 mt-1">Chat with players looking for games</p>
+        <p class="text-xs text-gray-400 mt-1">
+          Chat with players from all games
+        </p>
       </div>
       
-      <div class="chat-messages" bind:this={globalChatContainer}>
-        {#each globalMessages as message}
-          {#if message.isSystem}
-            <div class="chat-system-message">
-              {message.message}
-            </div>
-          {:else}
-            <div class="chat-message {message.isOwn ? 'own' : ''}">
-              <div class="chat-message-content">
-                {#if !message.isOwn}
-                  <div class="chat-message-username">{message.username}</div>
-                {/if}
-                <div class="chat-message-bubble">
-                  <div class="chat-message-text">{message.message}</div>
-                  <div class="chat-message-time">
-                    {new Date(message.timestamp).toLocaleTimeString()}
-                  </div>
-                </div>
-              </div>
-            </div>
-          {/if}
-        {/each}
-        
-        {#if globalMessages.length === 0}
-          <div class="chat-empty">
-            <div class="chat-empty-icon">🌍</div>
-            <div>No messages yet</div>
-            <div class="text-sm">Say hello!</div>
-          </div>
-        {/if}
-      </div>
-      
-      <div class="chat-input-container">
-        <div class="chat-input-group">
-          <input
-            type="text"
-            placeholder={connectedToGlobalChat ? "Type a message..." : "Connecting..."}
-            class="chat-input"
-            bind:value={newGlobalMessage}
-            on:keydown={handleGlobalChatKeyPress}
-            disabled={!connectedToGlobalChat}
-          />
-          <button 
-            class="chat-send-btn"
-            on:click={sendGlobalMessage}
-            disabled={!newGlobalMessage.trim() || !connectedToGlobalChat}
-          >
-            Send
-          </button>
-        </div>
+      <div class="flex-1 min-h-0">
+        <Chat 
+          messages={globalMessages}
+          onSendMessage={handleGlobalChatMessage}
+          disabled={!connectedToGlobalChat}
+          placeholder="Chat with everyone..."
+        />
       </div>
     </div>
   </div>

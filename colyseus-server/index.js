@@ -18,8 +18,9 @@ const gameServer = new Server({
 });
 
 // Import game rooms
-const GlobalChatRoom = require("./rooms/GlobalChatRoom");
-const BalanceRoom = require("./rooms/BalanceRoom");
+const PongRoom = require("./rooms/PongRoom"); // Make sure this file exists
+
+console.log("PongRoom imported:", typeof PongRoom); // Debug log
 
 // Lobby schemas using decorators
 class LobbyPlayer extends Schema {}
@@ -45,9 +46,9 @@ class GameLobbyRoom extends Room {
     
     // Initialize all properties with defaults
     this.state.players = new MapSchema();
-    this.state.gameType = options.gameType || "balance";
-    this.state.maxPlayers = options.maxPlayers || 8;
-    this.state.minPlayers = options.minPlayers || 2;
+    this.state.gameType = options.gameType || "pong"; // Default to pong now
+    this.state.maxPlayers = options.maxPlayers || 2; // Pong max players
+    this.state.minPlayers = options.minPlayers || 2; // Pong min players
     this.state.gameStarting = false;
     this.state.countdown = 0;
     
@@ -147,65 +148,68 @@ class GameLobbyRoom extends Room {
     // Add player to state
     this.state.players.set(client.sessionId, player);
     
-    console.log(`Player ${player.username} added to lobby. Total players: ${this.state.players.size}`);
+    console.log(`Player ${player.username} added to lobby. Total players: ${this.state.players.size}/${this.state.maxPlayers}`);
     
-    // Force state synchronization
+    // Broadcast player joined
     this.broadcast("player_joined", {
-      sessionId: client.sessionId,
       username: player.username,
-      totalPlayers: this.state.players.size
+      totalPlayers: this.state.players.size,
+      maxPlayers: this.state.maxPlayers
     });
     
-    // Send lobby info to the joining player
-    client.send("lobby_info", {
-      gameType: this.state.gameType,
-      maxPlayers: this.state.maxPlayers,
-      minPlayers: this.state.minPlayers
-    });
-    
-    // Debug: Log current state
-    console.log("Current lobby state after join:", {
-      playersCount: this.state.players.size,
-      gameType: this.state.gameType,
-      gameStarting: this.state.gameStarting,
-      playersKeys: Array.from(this.state.players.keys())
-    });
-  }
-  
-  onMessage(type, callback) {
-    // Override to add logging
-    console.log(`Registering message handler for: ${type}`);
-    return super.onMessage(type, callback);
-  }
-  
-  onLeave(client) {
-    console.log(`Player ${client.sessionId} left ${this.state.gameType} lobby`);
-    this.state.players.delete(client.sessionId);
-    
-    if (this.state.gameStarting) {
-      this.cancelGameStart();
+    // For Pong, just notify that lobby is full but don't auto-start
+    // Players still need to ready up manually
+    if (this.state.players.size === this.state.maxPlayers && this.state.gameType === "pong") {
+      console.log("Pong lobby full! Both players can now ready up to start.");
+      this.broadcast("lobby_full", {
+        message: "Lobby is full! Both players ready up to start the game."
+      });
     }
   }
   
-  checkGameStart() {
-    const players = Array.from(this.state.players.values());
-    const readyPlayers = players.filter(p => p.ready);
+  onLeave(client, consented) {
+    const player = this.state.players.get(client.sessionId);
+    const username = player ? player.username : "Unknown";
     
-    console.log(`Ready check: ${readyPlayers.length}/${players.length} ready, min: ${this.state.minPlayers}`);
+    this.state.players.delete(client.sessionId);
+    console.log(`Player ${username} left ${this.state.gameType} lobby. Remaining: ${this.state.players.size}`);
     
-    if (players.length >= this.state.minPlayers && 
-        readyPlayers.length === players.length && 
-        !this.state.gameStarting) {
-      this.startGameCountdown();
-    } else if (this.state.gameStarting && 
-               (readyPlayers.length !== players.length || players.length < this.state.minPlayers)) {
+    // Cancel game start if not enough players
+    if (this.state.gameStarting && this.state.players.size < this.state.minPlayers) {
       this.cancelGameStart();
+    }
+    
+    this.broadcast("player_left", {
+      username: username,
+      totalPlayers: this.state.players.size
+    });
+  }
+  
+  checkGameStart() {
+    const totalPlayers = this.state.players.size;
+    const readyPlayers = Array.from(this.state.players.values()).filter(p => p.ready).length;
+    
+    console.log(`Checking game start: ${readyPlayers}/${totalPlayers} ready, min: ${this.state.minPlayers}, max: ${this.state.maxPlayers}`);
+    
+    // For Pong: need exactly 2 players and both must be ready
+    if (this.state.gameType === "pong") {
+      if (totalPlayers === 2 && readyPlayers === 2 && !this.state.gameStarting) {
+        console.log("Both Pong players ready, starting countdown!");
+        this.startGameCountdown();
+      }
+    } else {
+      // For other games: need minimum players and all must be ready
+      if (totalPlayers >= this.state.minPlayers && readyPlayers === totalPlayers && !this.state.gameStarting) {
+        this.startGameCountdown();
+      }
     }
   }
   
   startGameCountdown() {
+    if (this.state.gameStarting) return;
+    
     this.state.gameStarting = true;
-    this.state.countdown = 5;
+    this.state.countdown = 3;
     
     console.log("Starting game countdown...");
     this.broadcast("game_starting", { countdown: this.state.countdown });
@@ -222,8 +226,6 @@ class GameLobbyRoom extends Room {
   }
   
   cancelGameStart() {
-    console.log("Game start cancelled");
-    
     if (this.countdownTimer) {
       clearInterval(this.countdownTimer);
       this.countdownTimer = null;
@@ -231,7 +233,9 @@ class GameLobbyRoom extends Room {
     
     this.state.gameStarting = false;
     this.state.countdown = 0;
-    this.broadcast("game_cancelled");
+    
+    console.log("Game start cancelled");
+    this.broadcast("game_cancelled", { message: "Game start cancelled" });
   }
   
   async startGame() {
@@ -240,60 +244,136 @@ class GameLobbyRoom extends Room {
       this.countdownTimer = null;
     }
     
-    console.log("Starting game...");
+    console.log(`Starting ${this.state.gameType} game with ${this.state.players.size} players`);
     
-    // Create actual game room
     try {
-      const gameRoom = await matchMaker.createRoom(this.state.gameType, {
-        players: Array.from(this.state.players.entries()).map(([sessionId, player]) => ({
-          sessionId,
-          username: player.username
-        }))
-      });
+      // Prepare player data for game room
+      const playersForGame = Array.from(this.state.players.entries()).map(([sessionId, player]) => ({
+        sessionId,
+        username: player.username,
+        userId: player.userId || null
+      }));
       
-      console.log(`Created game room: ${gameRoom.roomId}`);
+      console.log("Players for game:", playersForGame);
       
-      // Send all players to the game room
-      this.broadcast("redirect_to_game", { 
-        roomId: gameRoom.roomId,
-        gameType: this.state.gameType
-      });
+      // Create game room based on game type
+      let gameRoom;
+      if (this.state.gameType === "pong") {
+        console.log("Creating pong_game room...");
+        
+        // Use matchMaker.createRoom instead of create for better error handling
+        gameRoom = await matchMaker.createRoom("pong_game", {
+          players: playersForGame
+        });
+        
+        console.log("Raw game room object:", gameRoom);
+        console.log("Game room roomId:", gameRoom?.roomId);
+        console.log("Game room id:", gameRoom?.id);
+        
+        // Some versions of Colyseus use 'id' instead of 'roomId'
+        const roomId = gameRoom?.roomId || gameRoom?.id;
+        
+        if (!roomId) {
+          console.error("No room ID found in:", gameRoom);
+          throw new Error("Failed to create game room - no room ID returned");
+        }
+        
+        console.log("Using room ID:", roomId);
+        
+        // Send redirect message to all players
+        this.broadcast("redirect_to_game", {
+          roomId: roomId,
+          gameType: this.state.gameType
+        });
+        
+      } else {
+        throw new Error(`Unknown game type: ${this.state.gameType}`);
+      }
       
-      // Close this lobby after a delay
+      // Close lobby after short delay
       setTimeout(() => {
         this.disconnect();
-      }, 3000);
+      }, 2000);
       
     } catch (error) {
-      console.error("Failed to create game room:", error);
-      this.broadcast("game_error", { message: "Failed to start game" });
+      console.error("Error creating game room:", error);
+      console.error("Error stack:", error.stack);
+      this.broadcast("game_error", {
+        message: "Failed to create game room. Please try again."
+      });
       this.cancelGameStart();
     }
   }
   
   onDispose() {
-    console.log(`${this.state.gameType} lobby disposed`);
     if (this.countdownTimer) {
       clearInterval(this.countdownTimer);
+    }
+    console.log(`${this.state.gameType} lobby disposed`);
+  }
+}
+
+// Global Chat Room
+class GlobalChatRoom extends Room {
+  onCreate() {
+    console.log("Global chat room created");
+    this.maxClients = 100;
+  }
+  
+  onJoin(client, options) {
+    const username = options.username || `Player${client.sessionId.slice(0, 4)}`;
+    console.log(`${username} joined global chat`);
+    
+    // Notify others
+    this.broadcast("user_joined", { username }, { except: client });
+  }
+  
+  onLeave(client, consented) {
+    console.log(`Client left global chat`);
+    // Note: We don't have username stored, so we can't broadcast leave message with name
+  }
+  
+  onMessage(client, message) {
+    if (message.text && message.text.trim()) {
+      // In a real app, you'd want to store username on client join
+      // For now, we'll just broadcast the message
+      this.broadcast("chat_message", {
+        username: `Player${client.sessionId.slice(0, 4)}`, // Fallback username
+        message: message.text.trim(),
+        timestamp: Date.now()
+      });
     }
   }
 }
 
 // Register rooms
-gameServer.define("global_chat", GlobalChatRoom);
+try {
+  console.log("Registering Pong rooms...");
+  gameServer.define("pong_lobby", GameLobbyRoom); // Pong lobby
+  gameServer.define("pong_game", PongRoom); // Pong game room
+  gameServer.define("global_chat", GlobalChatRoom); // Global chat
+  console.log("✅ Pong rooms registered successfully");
+} catch (error) {
+  console.error("❌ Failed to register rooms:", error);
+}
 
-gameServer.define("balance_lobby", GameLobbyRoom)
-  .filterBy(['gameType']);
+// Legacy room definitions for backwards compatibility
+gameServer.define("balance_lobby", GameLobbyRoom); // Keep for now, but redirect to pong
 
-gameServer.define("balance", BalanceRoom);
+// Start the server
+const PORT = process.env.PORT || 2567;
+gameServer.listen(PORT);
+console.log(`🎮 Colyseus server listening on port ${PORT}`);
+console.log(`🏓 Pong game server ready!`);
+console.log(`💬 Global chat available`);
 
-const PORT = 2567;
-server.listen(PORT, () => {
-  console.log(`🎮 Colyseus Game Server running on ws://localhost:${PORT}`);
-  console.log(`📋 Registered rooms:`);
-  console.log(`   ⏳ balance_lobby - Game lobby for Balance Game`);
-  console.log(`   🎯 balance - Balance Game room`);
-  console.log(`🚀 Ready for connections!`);
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  gameServer.gracefullyShutdown();
 });
 
-module.exports = { gameServer, server };
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully');
+  gameServer.gracefullyShutdown();
+});

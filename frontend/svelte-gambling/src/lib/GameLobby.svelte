@@ -1,8 +1,9 @@
 <script>
   import { onMount, onDestroy } from "svelte";
-  import BalanceGame from "./BalanceGame.svelte";
+  import PongGame from "./PongGame.svelte"; // Import PongGame instead of BalanceGame
+  import Chat from "./Chat.svelte";
   
-  export let gameType = "balance";
+  export let gameType = "pong"; // Default to pong now
   export let onBack;
   
   let client = null;
@@ -18,19 +19,17 @@
   let connecting = false;
   let error = null;
   
-  // Chat state
+  // Chat state - simplified for unified chat
   let chatMessages = [];
-  let newMessage = "";
-  let chatContainer;
   
-  // Game info
+  // Game info - updated for Pong
   const gameInfo = {
-    balance: {
-      name: "Balance Game",
-      description: "Keep your stick balanced while avoiding falling plates. Last player standing wins!",
-      icon: "🎯",
+    pong: {
+      name: "Pong",
+      description: "Classic arcade action! Control your paddle and score against your opponent.",
+      icon: "🏓",
       minPlayers: 2,
-      maxPlayers: 8
+      maxPlayers: 2
     }
   };
   
@@ -69,7 +68,7 @@
       const user = JSON.parse(localStorage.getItem("user") || "{}");
       const username = user.username || `Player${Date.now().toString().slice(-4)}`;
       
-      console.log(`🎮 Connecting to ${gameType}_lobby as ${username}...`);
+      console.log(`🎮 Connecting directly to ${gameType}_lobby as ${username}...`);
       
       // Connect directly to the game-specific lobby
       lobbyRoom = await client.joinOrCreate(`${gameType}_lobby`, {
@@ -84,7 +83,7 @@
       
     } catch (err) {
       console.error("❌ Failed to connect to game lobby:", err);
-      error = `Failed to connect to ${gameType} lobby. Make sure the server is running.`;
+      error = `Failed to connect to ${gameType} lobby. Make sure the Colyseus server is running on port 2567.`;
       connecting = false;
     }
   }
@@ -98,13 +97,23 @@
     // Handle player joined message
     lobbyRoom.onMessage("player_joined", (data) => {
       console.log("👤 Player joined:", data);
-      updateFromState(lobbyRoom.state);
+      if (lobbyRoom.state) {
+        updateFromState(lobbyRoom.state);
+      }
+    });
+    
+    // Handle lobby full message (for Pong)
+    lobbyRoom.onMessage("lobby_full", (data) => {
+      console.log("🏓 Lobby full:", data);
+      // Could show a notification here if desired
     });
     
     // Handle player ready state change
     lobbyRoom.onMessage("player_ready_changed", (data) => {
       console.log("🎯 Player ready changed:", data);
-      updateFromState(lobbyRoom.state);
+      if (lobbyRoom.state) {
+        updateFromState(lobbyRoom.state);
+      }
     });
     
     // Handle game starting countdown
@@ -127,78 +136,76 @@
       await joinGame(data.roomId);
     });
     
-    // Handle chat messages
+    // Handle game creation error
+    lobbyRoom.onMessage("game_error", (data) => {
+      error = data.message;
+      gameStarting = false;
+      countdown = 0;
+    });
+    
+    // Handle chat messages - simplified for unified chat
     lobbyRoom.onMessage("chat_message", (data) => {
-      addChatMessage(data.username, data.message, data.timestamp);
+      const message = {
+        id: `${data.timestamp}_${Math.random()}`,
+        username: data.username,
+        message: data.message,
+        timestamp: data.timestamp,
+        isOwn: data.username === (ownPlayer?.username || "")
+      };
+      
+      chatMessages = [...chatMessages, message];
+      console.log("💬 Chat message:", message);
+    });
+    
+    // Handle state changes
+    lobbyRoom.onStateChange((state) => {
+      updateFromState(state);
     });
     
     // Handle room errors
     lobbyRoom.onError((code, message) => {
-      console.error("Room error:", code, message);
+      console.error("❌ Room error:", code, message);
       error = `Room error: ${message}`;
     });
     
-    // Handle initial lobby state
-    lobbyRoom.onStateChange.once((state) => {
-      console.log("📊 Initial state received");
-      updateFromState(state);
-      
-      // Set up player change listeners
-      if (state.players) {
-        state.players.onAdd = (player, sessionId) => {
-          console.log(`Player added: ${sessionId} - ${player.username}`);
-          updateFromState(state);
-        };
-        
-        state.players.onRemove = (player, sessionId) => {
-          console.log(`Player removed: ${sessionId}`);
-          updateFromState(state);
-        };
-      }
-    });
-
-    // Handle lobby state changes
-    lobbyRoom.onStateChange((state) => {
-      updateFromState(state);
+    // Handle disconnection
+    lobbyRoom.onLeave((code) => {
+      console.log("👋 Left lobby room with code:", code);
     });
   }
   
   function updateFromState(state) {
     if (!state || !state.players) return;
     
-    players = Array.from(state.players.entries()).map(([sessionId, player]) => ({
-      sessionId,
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    const username = user.username || `Player${Date.now().toString().slice(-4)}`;
+    
+    players = Array.from(state.players.values()).map(player => ({
       username: player.username,
       ready: player.ready,
       joinedAt: player.joinedAt,
-      isOwn: sessionId === lobbyRoom.sessionId
+      isOwn: player.username === username
     }));
     
     ownPlayer = players.find(p => p.isOwn) || null;
+    
+    console.log("🔄 Updated state:", {
+      playersCount: players.length,
+      ownPlayer: ownPlayer?.username,
+      gameStarting
+    });
   }
   
   async function joinGame(roomId) {
     try {
-      console.log(`🎮 Joining game room: ${roomId}`);
-      
+      console.log("🎮 Joining game room:", roomId);
       gameRoom = await client.joinById(roomId);
-      
-      console.log("✅ Successfully joined game room");
-      
-      // Leave lobby room
-      if (lobbyRoom) {
-        lobbyRoom.leave();
-        lobbyRoom = null;
-      }
-      
-      // Switch to game view
       currentView = "game";
       
     } catch (err) {
       console.error("❌ Failed to join game:", err);
       error = "Failed to join game. Please try again.";
       
-      // Try to reconnect to lobby
       setTimeout(() => {
         connectToGameLobby();
       }, 1000);
@@ -207,41 +214,23 @@
   
   function toggleReady() {
     if (lobbyRoom && !gameStarting && !connecting) {
-      lobbyRoom.send("toggle_ready");
-    }
-  }
-  
-  function addChatMessage(username, message, timestamp) {
-    const msg = {
-      id: `${timestamp}_${Math.random()}`,
-      username: username,
-      message: message,
-      timestamp: timestamp,
-      isOwn: username === (ownPlayer?.username || "")
-    };
-    
-    chatMessages = [...chatMessages, msg];
-    
-    // Auto-scroll to bottom
-    setTimeout(() => {
-      if (chatContainer) {
-        chatContainer.scrollTop = chatContainer.scrollHeight;
+      try {
+        lobbyRoom.send("toggle_ready");
+        console.log(`🎯 ${ownPlayer?.ready ? 'Unreadying' : 'Readying'} up...`);
+      } catch (err) {
+        console.error("Error sending ready toggle:", err);
       }
-    }, 10);
-  }
-  
-  function sendChatMessage() {
-    const message = newMessage.trim();
-    if (message && lobbyRoom && !connecting) {
-      lobbyRoom.send("chat_message", { text: message });
-      newMessage = "";
     }
   }
   
-  function handleKeyPress(event) {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      sendChatMessage();
+  // Chat handler for unified chat component
+  function handleChatMessage(message) {
+    if (lobbyRoom && !connecting) {
+      try {
+        lobbyRoom.send("chat_message", { text: message });
+      } catch (err) {
+        console.error("Error sending chat message:", err);
+      }
     }
   }
   
@@ -249,7 +238,6 @@
     currentView = "lobby";
     gameRoom = null;
     
-    // Reconnect to lobby
     setTimeout(() => {
       connectToGameLobby();
     }, 500);
@@ -263,8 +251,8 @@
 
 {#if error}
   <!-- Error State -->
-  <div class="min-h-screen flex items-center justify-center p-6 bg-gradient-to-br from-gray-900 to-purple-900">
-    <div class="card max-w-md w-full text-center bg-black/40 backdrop-blur-sm">
+  <div class="min-h-screen flex items-center justify-center p-6">
+    <div class="card max-w-md w-full text-center">
       <div class="text-4xl mb-4">⚠️</div>
       <h2 class="text-xl font-bold mb-4 text-red-400">Connection Error</h2>
       <p class="text-gray-300 mb-6">{error}</p>
@@ -276,18 +264,23 @@
           Back to Menu
         </button>
       </div>
+      
+      <div class="mt-6 text-sm text-gray-400">
+        <p><strong>Make sure the Colyseus server is running:</strong></p>
+        <p class="font-mono text-xs mt-2">cd colyseus-server && node index.js</p>
+      </div>
     </div>
   </div>
 
 {:else if currentView === "game"}
   <!-- Game View -->
-  <BalanceGame {gameRoom} onBack={handleBackFromGame} />
+  <PongGame {gameRoom} onBack={handleBackFromGame} />
 
 {:else}
   <!-- Lobby View -->
-  <div class="min-h-screen flex flex-col bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900">
+  <div class="game-container min-h-screen flex flex-col">
     <!-- Header -->
-    <div class="flex items-center justify-between p-4 bg-black/40 backdrop-blur-sm border-b border-white/10">
+    <div class="flex items-center justify-between p-6 bg-black/20 border-b border-white/10">
       <div class="flex items-center gap-4">
         <button class="btn btn-secondary flex items-center gap-2" on:click={handleBack}>
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -299,9 +292,9 @@
         <div>
           <h1 class="text-2xl font-bold flex items-center gap-2">
             <span class="text-3xl">{currentGameInfo?.icon}</span>
-            {currentGameInfo?.name} Lobby
+            {currentGameInfo?.name}
           </h1>
-          <p class="text-sm text-gray-400">{currentGameInfo?.description}</p>
+          <p class="text-gray-400">{currentGameInfo?.description}</p>
         </div>
       </div>
       
@@ -310,20 +303,67 @@
           {players.length}/{currentGameInfo?.maxPlayers} Players
         </div>
         <div class="text-sm text-gray-400">
-          {connecting ? 'Connecting...' : gameStarting ? `Starting in ${countdown}...` : 'Waiting for players...'}
+          {connecting ? "Connecting..." : 
+           gameStarting ? `Starting in ${countdown}s` :
+           players.length < (currentGameInfo?.minPlayers || 2) ? 
+           `Need ${(currentGameInfo?.minPlayers || 2) - players.length} more player${(currentGameInfo?.minPlayers || 2) - players.length === 1 ? '' : 's'}` :
+           players.filter(p => p.ready).length < players.length ? 
+           "Waiting for players to ready up" :
+           "Ready to start!"}
         </div>
       </div>
     </div>
 
     <!-- Main Content -->
-    <div class="flex-1 flex overflow-hidden">
+    <div class="flex flex-1 min-h-0">
       <!-- Players Panel -->
-      <div class="flex-1 flex flex-col p-6">
-        <h3 class="text-xl font-semibold mb-4">Players in Lobby</h3>
+      <div class="w-2/3 flex flex-col">
+        <div class="p-4 border-b border-white/10 bg-black/10">
+          <div class="flex items-center justify-between">
+            <h3 class="font-semibold">Players</h3>
+            <div class="text-sm text-gray-400">
+              {players.filter(p => p.ready).length}/{players.length} Ready
+            </div>
+          </div>
+        </div>
         
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 overflow-y-auto">
-          {#each players as player}
-            <div class="flex items-center justify-between p-4 rounded-lg bg-white/10 backdrop-blur-sm border {player.ready ? 'border-green-400/50' : 'border-white/20'} {player.isOwn ? 'ring-2 ring-purple-400' : ''}">
+        <div class="flex-1 overflow-y-auto p-4">
+          <!-- Ready Button -->
+          {#if ownPlayer && !gameStarting}
+            <div class="mb-6 text-center">
+              <button 
+                class="btn {ownPlayer.ready ? 'btn-success' : 'btn-primary'} text-lg px-8 py-3 hover:scale-105 transition-transform"
+                on:click={toggleReady}
+                disabled={connecting}
+              >
+                {ownPlayer.ready ? "✓ Ready" : "🚀 Ready Up"}
+              </button>
+            </div>
+          {/if}
+          
+          <!-- Game Starting Countdown -->
+          {#if gameStarting}
+            <div class="mb-6 text-center">
+              <div class="text-4xl font-bold text-green-400 animate-pulse">
+                {countdown}
+              </div>
+              <div class="text-lg text-green-300">Game Starting...</div>
+            </div>
+          {/if}
+          
+          <!-- Special message for Pong 2-player requirement -->
+          {#if players.length === 1 && !connecting}
+            <div class="text-center text-blue-400 py-8 mb-4">
+              <div class="text-4xl mb-4">🏓</div>
+              <div class="text-lg font-semibold mb-2">Waiting for Opponent</div>
+              <div class="text-sm text-gray-400">Pong requires exactly 2 players</div>
+              <div class="text-xs text-gray-500 mt-2">Share this lobby with a friend!</div>
+            </div>
+          {/if}
+          
+          <!-- Players List -->
+          {#each players as player, index}
+            <div class="flex items-center justify-between p-3 mb-2 rounded-lg bg-white/5 border border-white/10 {player.isOwn ? 'ring-2 ring-purple-400/50' : ''}">
               <div class="flex items-center gap-3">
                 <div class="w-10 h-10 rounded-full bg-gradient-to-br from-purple-400 to-blue-500 flex items-center justify-center text-white font-bold">
                   {player.username.charAt(0).toUpperCase()}
@@ -333,8 +373,11 @@
                   <div class="font-semibold flex items-center gap-2">
                     {player.username}
                     {#if player.isOwn}
-                      <span class="text-xs bg-purple-500 px-2 py-1 rounded text-white">You</span>
+                      <span class="text-xs bg-purple-500/20 text-purple-300 px-2 py-1 rounded">You</span>
                     {/if}
+                    <span class="text-xs bg-blue-500/20 text-blue-300 px-2 py-1 rounded">
+                      {index === 0 ? "Left Paddle" : "Right Paddle"}
+                    </span>
                   </div>
                   <div class="text-sm {player.ready ? 'text-green-400' : 'text-gray-400'}">
                     {player.ready ? "Ready" : "Not Ready"}
@@ -342,123 +385,62 @@
                 </div>
               </div>
               
-              <div class="text-2xl">
+              <div class="text-lg">
                 {player.ready ? "✅" : "⏳"}
               </div>
             </div>
           {/each}
           
           {#if players.length === 0 && !connecting}
-            <div class="col-span-2 text-center text-gray-400 py-12">
-              <div class="text-6xl mb-4">👥</div>
-              <div class="text-xl">Waiting for players to join...</div>
-              <div class="text-sm mt-2">Be the first one here!</div>
+            <div class="text-center text-gray-400 py-8">
+              <div class="text-4xl mb-2">👥</div>
+              <div>Waiting for players...</div>
             </div>
           {/if}
           
           {#if connecting}
-            <div class="col-span-2 text-center text-gray-400 py-12">
-              <div class="w-12 h-12 border-3 border-purple-400/30 border-t-purple-400 rounded-full animate-spin mx-auto mb-4"></div>
+            <div class="text-center text-gray-400 py-8">
+              <div class="w-8 h-8 border-2 border-purple-400/30 border-t-purple-400 rounded-full animate-spin mx-auto mb-2"></div>
               <div>Connecting to lobby...</div>
             </div>
           {/if}
-        </div>
-
-        <!-- Ready Button -->
-        <div class="mt-6 flex justify-center">
-          {#if ownPlayer && !gameStarting}
-            <button 
-              class="btn btn-lg {ownPlayer.ready ? 'btn-success' : 'btn-primary'} px-8 py-3 text-lg"
-              on:click={toggleReady}
-              disabled={connecting}
-            >
-              {ownPlayer.ready ? "✓ Ready" : "Click to Ready Up"}
-            </button>
-          {:else if gameStarting}
-            <div class="text-2xl font-bold text-yellow-400 animate-pulse">
-              Game starting in {countdown}...
+          
+          <!-- Pong Game Rules -->
+          {#if players.length > 0 && !gameStarting}
+            <div class="mt-6 p-4 bg-gradient-to-r from-purple-500/10 to-blue-500/10 rounded-lg border border-purple-500/20">
+              <h4 class="font-bold text-purple-300 mb-3">🏓 How to Play Pong:</h4>
+              <div class="space-y-2 text-sm text-gray-300">
+                <div class="flex items-start gap-2">
+                  <span class="text-purple-400">•</span>
+                  <span>Use W/S keys or mouse to move your paddle</span>
+                </div>
+                <div class="flex items-start gap-2">
+                  <span class="text-purple-400">•</span>
+                  <span>Hit the ball to send it to your opponent</span>
+                </div>
+                <div class="flex items-start gap-2">
+                  <span class="text-purple-400">•</span>
+                  <span>First player to 5 points wins!</span>
+                </div>
+                <div class="flex items-start gap-2">
+                  <span class="text-purple-400">•</span>
+                  <span>Don't let the ball get past your paddle</span>
+                </div>
+              </div>
             </div>
           {/if}
         </div>
       </div>
 
       <!-- Chat Panel -->
-      <div class="w-96 chat-container">
-        <div class="chat-header">
-          <h3 class="font-semibold text-lg">Lobby Chat</h3>
-        </div>
-        
-        <div class="chat-messages" bind:this={chatContainer}>
-          {#each chatMessages as message}
-            <div class="chat-message {message.isOwn ? 'own' : ''}">
-              <div class="chat-message-content">
-                {#if !message.isOwn}
-                  <div class="chat-message-username">{message.username}</div>
-                {/if}
-                <div class="chat-message-bubble">
-                  <div class="chat-message-text">{message.message}</div>
-                  <div class="chat-message-time">
-                    {new Date(message.timestamp).toLocaleTimeString()}
-                  </div>
-                </div>
-              </div>
-            </div>
-          {/each}
-          
-          {#if chatMessages.length === 0}
-            <div class="chat-empty">
-              <div class="chat-empty-icon">💬</div>
-              <div>No messages yet</div>
-              <div class="text-sm">Say hello to other players!</div>
-            </div>
-          {/if}
-        </div>
-        
-        <div class="chat-input-container">
-          <div class="chat-input-group">
-            <input
-              type="text"
-              placeholder="Type a message..."
-              class="chat-input"
-              bind:value={newMessage}
-              on:keydown={handleKeyPress}
-              disabled={!lobbyRoom || connecting}
-            />
-            <button 
-              class="chat-send-btn"
-              on:click={sendChatMessage}
-              disabled={!newMessage.trim() || !lobbyRoom || connecting}
-            >
-              Send
-            </button>
-          </div>
-        </div>
+      <div class="w-1/3 border-l border-white/10 bg-black/10">
+        <Chat 
+          messages={chatMessages}
+          onSendMessage={handleChatMessage}
+          disabled={!lobbyRoom || gameStarting || connecting}
+          placeholder="Chat with your opponent..."
+        />
       </div>
     </div>
   </div>
 {/if}
-
-<style>
-  /* Custom scrollbar for chat */
-  .overflow-y-auto::-webkit-scrollbar {
-    width: 6px;
-  }
-  
-  .overflow-y-auto::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.2);
-  }
-  
-  .overflow-y-auto::-webkit-scrollbar-thumb {
-    background: rgba(139, 92, 246, 0.5);
-    border-radius: 3px;
-  }
-  
-  .overflow-y-auto::-webkit-scrollbar-thumb:hover {
-    background: rgba(139, 92, 246, 0.7);
-  }
-  
-  .btn-lg {
-    font-size: 1.125rem;
-    padding: 0.75rem 2rem;
-  }
-</style>
