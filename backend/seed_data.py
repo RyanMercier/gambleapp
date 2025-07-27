@@ -1,151 +1,16 @@
 """
-Run this script to populate the database with initial categories and sample trends.
+Run this script to populate the database with initial data.
 Usage: python seed_data.py
 """
 
 from sqlalchemy.orm import sessionmaker
 from database import engine
-from models import TrendCategory, Trend, User
+from models import AttentionTarget, User, TargetType
 from datetime import datetime, timedelta
+from decimal import Decimal
 import random
 
 SessionLocal = sessionmaker(bind=engine)
-
-def seed_categories():
-    db = SessionLocal()
-    
-    categories = [
-        {
-            "name": "Technology", 
-            "description": "Tech stocks, product launches, and industry trends",
-            "icon": "💻"
-        },
-        {
-            "name": "Cryptocurrency", 
-            "description": "Digital currency prices and blockchain adoption",
-            "icon": "₿"
-        },
-        {
-            "name": "Finance", 
-            "description": "Stock market, economic indicators, and market trends",
-            "icon": "📈"
-        },
-        {
-            "name": "Social Media", 
-            "description": "Platform growth, viral content, and user engagement",
-            "icon": "📱"
-        },
-        {
-            "name": "Sports", 
-            "description": "Game outcomes, player performance, and league standings",
-            "icon": "⚽"
-        },
-        {
-            "name": "Entertainment", 
-            "description": "Box office results, streaming numbers, and award shows",
-            "icon": "🎬"
-        },
-        {
-            "name": "Climate", 
-            "description": "Weather patterns, environmental data, and sustainability metrics",
-            "icon": "🌍"
-        },
-        {
-            "name": "Politics", 
-            "description": "Election outcomes, policy changes, and approval ratings",
-            "icon": "🏛️"
-        }
-    ]
-    
-    for cat_data in categories:
-        existing = db.query(TrendCategory).filter(TrendCategory.name == cat_data["name"]).first()
-        if not existing:
-            category = TrendCategory(**cat_data)
-            db.add(category)
-    
-    db.commit()
-    print("Categories seeded successfully!")
-    db.close()
-
-def seed_sample_trends():
-    db = SessionLocal()
-    
-    # Get categories
-    tech_cat = db.query(TrendCategory).filter(TrendCategory.name == "Technology").first()
-    crypto_cat = db.query(TrendCategory).filter(TrendCategory.name == "Cryptocurrency").first()
-    finance_cat = db.query(TrendCategory).filter(TrendCategory.name == "Finance").first()
-    social_cat = db.query(TrendCategory).filter(TrendCategory.name == "Social Media").first()
-    
-    if not all([tech_cat, crypto_cat, finance_cat, social_cat]):
-        print("Categories not found. Please seed categories first.")
-        return
-    
-    sample_trends = [
-        {
-            "title": "Apple Stock Price to Hit $200",
-            "description": "Will Apple Inc. (AAPL) reach $200 per share by the end of Q2 2024? Recent iPhone sales and AI developments could drive significant growth.",
-            "category_id": tech_cat.id,
-            "current_value": 185.50,
-            "target_value": 200.00,
-            "deadline": datetime.now() + timedelta(days=45),
-            "creator_id": 1
-        },
-        {
-            "title": "Bitcoin to Break $75,000",
-            "description": "Bitcoin has been showing strong momentum. Will it break the $75,000 resistance level within the next 30 days?",
-            "category_id": crypto_cat.id,
-            "current_value": 68500.00,
-            "target_value": 75000.00,
-            "deadline": datetime.now() + timedelta(days=30),
-            "creator_id": 1
-        },
-        {
-            "title": "S&P 500 Index Above 5,200",
-            "description": "The S&P 500 has been climbing steadily. Will it reach 5,200 points before the Federal Reserve's next meeting?",
-            "category_id": finance_cat.id,
-            "current_value": 5050.00,
-            "target_value": 5200.00,
-            "deadline": datetime.now() + timedelta(days=35),
-            "creator_id": 1
-        },
-        {
-            "title": "TikTok User Base to Reach 2 Billion",
-            "description": "TikTok's growth continues globally. Will it achieve 2 billion monthly active users by year-end?",
-            "category_id": social_cat.id,
-            "current_value": 1800000000,
-            "target_value": 2000000000,
-            "deadline": datetime.now() + timedelta(days=120),
-            "creator_id": 1
-        },
-        {
-            "title": "Tesla Deliveries Exceed 500K This Quarter",
-            "description": "Tesla has ramped up production significantly. Will they deliver more than 500,000 vehicles this quarter?",
-            "category_id": tech_cat.id,
-            "current_value": 435000,
-            "target_value": 500000,
-            "deadline": datetime.now() + timedelta(days=60),
-            "creator_id": 1
-        },
-        {
-            "title": "Ethereum Price Above $4,000",
-            "description": "With upcoming network upgrades and increased adoption, will Ethereum break $4,000 in the next 6 weeks?",
-            "category_id": crypto_cat.id,
-            "current_value": 3650.00,
-            "target_value": 4000.00,
-            "deadline": datetime.now() + timedelta(days=42),
-            "creator_id": 1
-        }
-    ]
-    
-    for trend_data in sample_trends:
-        existing = db.query(Trend).filter(Trend.title == trend_data["title"]).first()
-        if not existing:
-            trend = Trend(**trend_data)
-            db.add(trend)
-    
-    db.commit()
-    print("Sample trends seeded successfully!")
-    db.close()
 
 def create_admin_user():
     db = SessionLocal()
@@ -158,7 +23,7 @@ def create_admin_user():
             username="admin",
             email="admin@trendbet.com",
             password_hash=hash_password("admin123"),
-            balance=10000.00
+            balance=Decimal("10000.00")
         )
         db.add(admin)
         db.commit()
@@ -168,9 +33,153 @@ def create_admin_user():
     
     db.close()
 
+def seed_sample_targets():
+    """Seed initial attention targets for each category"""
+    db = SessionLocal()
+    
+    sample_targets = [
+        # Politicians
+        {
+            "name": "Donald Trump",
+            "type": TargetType.POLITICIAN,
+            "search_term": "Donald Trump",
+            "description": "Former and current US President - attention tracking"
+        },
+        {
+            "name": "Joe Biden", 
+            "type": TargetType.POLITICIAN,
+            "search_term": "Joe Biden",
+            "description": "US President - political attention tracking"
+        },
+        {
+            "name": "Kamala Harris",
+            "type": TargetType.POLITICIAN, 
+            "search_term": "Kamala Harris",
+            "description": "US Vice President - political attention tracking"
+        },
+        {
+            "name": "Ron DeSantis",
+            "type": TargetType.POLITICIAN,
+            "search_term": "Ron DeSantis", 
+            "description": "Florida Governor - political attention tracking"
+        },
+        
+        # Billionaires
+        {
+            "name": "Elon Musk",
+            "type": TargetType.BILLIONAIRE,
+            "search_term": "Elon Musk",
+            "description": "CEO of Tesla and SpaceX - billionaire attention tracking"
+        },
+        {
+            "name": "Jeff Bezos",
+            "type": TargetType.BILLIONAIRE,
+            "search_term": "Jeff Bezos", 
+            "description": "Founder of Amazon - billionaire attention tracking"
+        },
+        {
+            "name": "Bill Gates",
+            "type": TargetType.BILLIONAIRE,
+            "search_term": "Bill Gates",
+            "description": "Microsoft founder - billionaire attention tracking"
+        },
+        {
+            "name": "Warren Buffett",
+            "type": TargetType.BILLIONAIRE,
+            "search_term": "Warren Buffett",
+            "description": "Berkshire Hathaway CEO - investor attention tracking"
+        },
+        
+        # Countries
+        {
+            "name": "United States",
+            "type": TargetType.COUNTRY,
+            "search_term": "United States news",
+            "description": "USA - country attention tracking"
+        },
+        {
+            "name": "China",
+            "type": TargetType.COUNTRY,
+            "search_term": "China news",
+            "description": "People's Republic of China - country attention tracking"
+        },
+        {
+            "name": "Japan",
+            "type": TargetType.COUNTRY,
+            "search_term": "Japan news", 
+            "description": "Japan - country attention tracking"
+        },
+        {
+            "name": "United Kingdom",
+            "type": TargetType.COUNTRY,
+            "search_term": "United Kingdom news",
+            "description": "UK - country attention tracking"
+        },
+        
+        # Stocks/Meme Stocks
+        {
+            "name": "Tesla",
+            "type": TargetType.STOCK,
+            "search_term": "Tesla stock",
+            "description": "Tesla Inc - meme stock attention tracking"
+        },
+        {
+            "name": "GameStop", 
+            "type": TargetType.STOCK,
+            "search_term": "GameStop stock",
+            "description": "GameStop Corp - meme stock attention tracking"
+        },
+        {
+            "name": "AMC",
+            "type": TargetType.STOCK,
+            "search_term": "AMC stock",
+            "description": "AMC Entertainment - meme stock attention tracking"
+        },
+        {
+            "name": "Bitcoin",
+            "type": TargetType.STOCK,
+            "search_term": "Bitcoin",
+            "description": "Bitcoin cryptocurrency - digital asset attention tracking"
+        }
+    ]
+    
+    for target_data in sample_targets:
+        existing = db.query(AttentionTarget).filter(
+            AttentionTarget.name == target_data["name"]
+        ).first()
+        
+        if not existing:
+            # Generate realistic starting data
+            base_attention_score = random.uniform(20.0, 80.0)
+            base_price = random.uniform(8.0, 15.0)
+            
+            target = AttentionTarget(
+                name=target_data["name"],
+                type=target_data["type"],
+                search_term=target_data["search_term"],
+                description=target_data["description"],
+                current_attention_score=Decimal(str(base_attention_score)),
+                current_share_price=Decimal(str(base_price))
+            )
+            db.add(target)
+            print(f"Added target: {target_data['name']} (Score: {base_attention_score:.1f}, Price: ${base_price:.2f})")
+    
+    db.commit()
+    print("Sample attention targets seeded successfully!")
+    db.close()
+
+# For backwards compatibility with the old function names
+def seed_categories():
+    """Legacy function - categories are now handled by TargetType enum"""
+    print("Categories are now handled by TargetType enum - no separate table needed")
+
+def seed_sample_trends():
+    """Legacy function - redirects to seed_sample_targets"""
+    seed_sample_targets()
+
 if __name__ == "__main__":
     print("Seeding TrendBet database...")
     create_admin_user()
     seed_categories()
-    seed_sample_trends()
+    seed_sample_targets()
     print("Database seeding completed!")

@@ -30,7 +30,7 @@
 
   async function loadTradeHistory() {
     try {
-      const data = await apiFetch('/trades/my'); // Assume this endpoint exists
+      const data = await apiFetch('/trades/my');
       trades = data.slice(0, 10); // Last 10 trades
     } catch (error) {
       console.error('Failed to load trade history:', error);

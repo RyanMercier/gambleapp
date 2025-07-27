@@ -24,8 +24,8 @@
 </script>
 
 <svelte:head>
-  <title>TrendBet - Predict the Future</title>
-  <meta name="description" content="Make predictions on trends and test your forecasting skills!" />
+  <title>TrendBet - Trade Attention Like Stocks</title>
+  <meta name="description" content="The world's first attention economy trading platform. Buy and sell attention shares based on Google Trends data!" />
 </svelte:head>
 
 <div class="min-h-screen flex flex-col bg-gradient-to-br from-slate-900 to-blue-900 text-white">
@@ -36,7 +36,7 @@
         📈 TrendBet
       </a>
       <div class="text-xs px-2 py-1 rounded-full bg-blue-500/20 text-blue-300">
-        BETA
+        ATTENTION TRADING
       </div>
     </div>
     
@@ -49,11 +49,14 @@
         <a href="/dashboard" class="btn btn-secondary text-sm">
           📊 Dashboard
         </a>
-        <a href="/trends" class="btn btn-secondary text-sm">
-          📈 Trends
+        <a href="/browse" class="btn btn-secondary text-sm">
+          🔍 Browse & Trade
         </a>
-        <a href="/profile" class="btn btn-secondary text-sm">
-          👤 Profile
+        <a href="/portfolio" class="btn btn-secondary text-sm">
+          💼 Portfolio
+        </a>
+        <a href="/tournaments" class="btn btn-secondary text-sm">
+          🏆 Tournaments
         </a>
       </div>
 
@@ -89,14 +92,16 @@
   <!-- Footer -->
   <footer class="bg-black/30 border-t border-white/10 py-4 px-6">
     <div class="text-center text-sm text-gray-400">
-      <p>© 2024 TrendBet • Predict the Future with Data</p>
+      <p>© 2024 TrendBet • Trade Attention Like Stocks</p>
       <div class="flex items-center justify-center gap-4 mt-2">
         <span class="flex items-center gap-1">
           <div class="w-2 h-2 rounded-full bg-green-400"></div>
           API Online
         </span>
         <span>•</span>
-        <span>Built with FastAPI & SvelteKit</span>
+        <span>Powered by Google Trends & FastAPI</span>
+        <span>•</span>
+        <span>🏛️ Politicians • 💰 Billionaires • 🌍 Countries • 📈 Meme Stocks</span>
       </div>
     </div>
   </footer>

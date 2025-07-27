@@ -6,7 +6,7 @@ import uvicorn
 from sqlalchemy import text
 from database import engine, SessionLocal
 from models import Base
-from seed_data import create_admin_user, seed_categories, seed_sample_trends
+from seed_data import create_admin_user, seed_sample_targets
 
 def init_database():
     """Initialize database with tables and seed data"""
@@ -19,17 +19,24 @@ def init_database():
     # Check if database is empty and seed if needed
     db = SessionLocal()
     try:
-        result = db.execute(text("SELECT COUNT(*) FROM trend_categories")).scalar()
+        # Check if we have any attention targets
+        result = db.execute(text("SELECT COUNT(*) FROM attention_targets")).scalar()
         if result == 0:
             print("Database is empty, seeding initial data...")
             create_admin_user()
-            seed_categories()
-            seed_sample_trends()
+            seed_sample_targets()
             print("✅ Database seeded with initial data")
         else:
             print("✅ Database already contains data")
     except Exception as e:
         print(f"Note: Could not check database contents: {e}")
+        # Try to seed anyway
+        try:
+            create_admin_user()
+            seed_sample_targets() 
+            print("✅ Database seeded")
+        except Exception as seed_error:
+            print(f"Warning: Could not seed database: {seed_error}")
     finally:
         db.close()
 

@@ -18,7 +18,7 @@
     { value: 'politician', label: '🏛️ Politicians', icon: '🏛️' },
     { value: 'billionaire', label: '💰 Billionaires', icon: '💰' },
     { value: 'country', label: '🌍 Countries', icon: '🌍' },
-    { value: 'stock', label: '📈 Stocks', icon: '📈' }
+    { value: 'stock', label: '📈 Meme Stocks', icon: '📈' }
   ];
 
   onMount(async () => {
@@ -219,7 +219,7 @@
 </script>
 
 <svelte:head>
-  <title>Browse Trends - TrendBet</title>
+  <title>Browse Attention Trends - TrendBet</title>
 </svelte:head>
 
 <div class="min-h-screen p-6">

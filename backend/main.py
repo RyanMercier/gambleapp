@@ -132,7 +132,7 @@ def get_targets(
     limit: int = Query(50, le=100),
     db: Session = Depends(get_db)
 ):
-    """Get all attention targets, optionally filtered by type"""
+    """Get all attention targets with frontend-compatible field names"""
     query = db.query(AttentionTarget).filter(AttentionTarget.is_active == True)
     
     if target_type:
@@ -151,7 +151,7 @@ def get_targets(
             "name": target.name,
             "type": target.type.value,
             "description": target.description,
-            "current_price": float(target.current_share_price),
+            "current_price": float(target.current_share_price),  # Frontend expects this field
             "attention_score": float(target.current_attention_score),
             "last_updated": target.last_updated
         })
@@ -570,6 +570,32 @@ async def start_background_tasks():
 async def startup_event():
     """Start background tasks when server starts"""
     asyncio.create_task(start_background_tasks())
+
+@app.get("/trends")
+def get_trends_legacy(limit: int = Query(50, le=100), db: Session = Depends(get_db)):
+    """Legacy endpoint - redirects to /targets for frontend compatibility"""
+    return get_targets(target_type=None, limit=limit, db=db)
+
+@app.get("/trends/categories") 
+def get_trend_categories():
+    """Get available target categories for frontend dropdowns"""
+    categories = []
+    for target_type in TargetType:
+        icon_map = {
+            "politician": "🏛️",
+            "billionaire": "💰", 
+            "country": "🌍",
+            "stock": "📈"
+        }
+        
+        categories.append({
+            "id": target_type.value,
+            "name": target_type.value.title(),
+            "icon": icon_map.get(target_type.value, "📊"),
+            "description": f"{target_type.value.title()} attention tracking"
+        })
+    
+    return categories
 
 if __name__ == "__main__":
     import uvicorn

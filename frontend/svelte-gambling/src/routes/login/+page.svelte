@@ -78,8 +78,8 @@
         </h1>
         <p class="text-gray-400">
           {mode === 'login' 
-            ? 'Sign in to continue forecasting' 
-            : 'Create your account and start predicting'}
+            ? 'Sign in to continue trading attention' 
+            : 'Create your account and start trading'}
         </p>
       </div>
 
@@ -157,7 +157,7 @@
               {mode === 'login' ? 'Signing in...' : 'Creating account...'}
             </div>
           {:else}
-            {mode === 'login' ? '🔮 Sign In' : '✨ Create Account'}
+            {mode === 'login' ? '📈 Sign In & Trade' : '🚀 Create Account'}
           {/if}
         </button>
 
@@ -182,16 +182,26 @@
     <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
       <div class="text-center p-4 bg-white/5 rounded-lg">
         <div class="text-2xl mb-2">📊</div>
-        <div class="text-xs text-gray-400">Data-Driven</div>
+        <div class="text-xs text-gray-400">Real-Time Data</div>
       </div>
       <div class="text-center p-4 bg-white/5 rounded-lg">
-        <div class="text-2xl mb-2">🎯</div>
-        <div class="text-xs text-gray-400">Skill Based</div>
+        <div class="text-2xl mb-2">💱</div>
+        <div class="text-xs text-gray-400">Instant Trading</div>
       </div>
       <div class="text-center p-4 bg-white/5 rounded-lg">
         <div class="text-2xl mb-2">🏆</div>
-        <div class="text-xs text-gray-400">Competitive</div>
+        <div class="text-xs text-gray-400">Tournaments</div>
       </div>
+    </div>
+
+    <!-- Demo Account Info -->
+    <div class="mt-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg text-center">
+      <p class="text-blue-300 text-sm mb-2">
+        <strong>Demo Account Available</strong>
+      </p>
+      <p class="text-gray-400 text-xs">
+        Username: <code>admin</code> • Password: <code>admin123</code>
+      </p>
     </div>
   </div>
 </div>
