@@ -1,26 +1,28 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+from datetime import datetime, timedelta
+from decimal import Decimal
+from typing import List, Optional
+
 from database import SessionLocal, engine
-from models import Base, User
+from models import Base, User, TrendCategory, Trend, Prediction
 from auth import (
     create_user, 
     authenticate_user, 
     create_access_token, 
     decode_access_token
 )
-import json
-from typing import Dict, List, Optional
 
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-# FastAPI app setup
-app = FastAPI()
+# FastAPI app
+app = FastAPI(title="TrendBet API", version="1.0.0")
 
-# CORS configuration
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,44 +31,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# OAuth2 config
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-# Chat system - organized by rooms
-chat_rooms: Dict[str, List[WebSocket]] = {}
-
-@app.websocket("/ws/chat/{room_id}")
-async def websocket_endpoint(websocket: WebSocket, room_id: str):
-    await websocket.accept()
-    
-    # Add to room
-    if room_id not in chat_rooms:
-        chat_rooms[room_id] = []
-    chat_rooms[room_id].append(websocket)
-    
-    try:
-        while True:
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            
-            # Broadcast to all clients in the same room
-            for client in chat_rooms[room_id]:
-                try:
-                    await client.send_text(json.dumps(message))
-                except:
-                    # Remove broken connections
-                    if client in chat_rooms[room_id]:
-                        chat_rooms[room_id].remove(client)
-                        
-    except WebSocketDisconnect:
-        if websocket in chat_rooms[room_id]:
-            chat_rooms[room_id].remove(websocket)
-        
-        # Clean up empty rooms
-        if len(chat_rooms[room_id]) == 0:
-            del chat_rooms[room_id]
-
-# Dependency to get DB session
+# Database dependency
 def get_db():
     db = SessionLocal()
     try:
@@ -74,31 +41,46 @@ def get_db():
     finally:
         db.close()
 
-# Request models
-class RegisterRequest(BaseModel):
+# Pydantic models
+class UserRegister(BaseModel):
     username: str
     email: str
     password: str
 
-class LoginRequest(BaseModel):
+class UserLogin(BaseModel):
     username: str
     password: str
 
-class StatsUpdateRequest(BaseModel):
-    user_id: int
-    wins: int = 0
-    losses: int = 0
-    profit: float = 0.0
+class TrendCreate(BaseModel):
+    title: str
+    description: str
+    category_id: int
+    target_value: float
+    deadline: datetime
 
-@app.get("/")
-def root():
-    return {"message": "Gamble Royale Backend API v2.0 - Enhanced Edition"}
+class PredictionCreate(BaseModel):
+    trend_id: int
+    prediction: bool
+    confidence: int
+    stake_amount: float
 
-@app.post("/register")
-def register(user: RegisterRequest, db: Session = Depends(get_db)):
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    balance: float
+    total_predictions: int
+    correct_predictions: int
+    accuracy_rate: float
+
+    class Config:
+        from_attributes = True
+
+# Auth endpoints
+@app.post("/auth/register")
+def register(user_data: UserRegister, db: Session = Depends(get_db)):
     # Check if user exists
     existing_user = db.query(User).filter(
-        (User.username == user.username) | (User.email == user.email)
+        (User.username == user_data.username) | (User.email == user_data.email)
     ).first()
     
     if existing_user:
@@ -107,232 +89,203 @@ def register(user: RegisterRequest, db: Session = Depends(get_db)):
             detail="Username or email already exists"
         )
     
-    user_obj = create_user(db, user.username, user.email, user.password)
-    token = create_access_token(data={"sub": user_obj.username})
+    user = create_user(db, user_data.username, user_data.email, user_data.password)
+    token = create_access_token(data={"sub": user.username})
     
     return {
         "token": token,
-        "id": user_obj.id, 
-        "username": user_obj.username,
-        "wins": user_obj.wins,
-        "losses": user_obj.losses,
-        "profit": float(user_obj.profit)
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "balance": float(user.balance),
+            "total_predictions": user.total_predictions,
+            "correct_predictions": user.correct_predictions,
+            "accuracy_rate": 0.0
+        }
     }
 
-@app.post("/login")
-def login(user: LoginRequest, db: Session = Depends(get_db)):
-    user_obj = authenticate_user(db, user.username, user.password)
-    if not user_obj:
+@app.post("/auth/login")
+def login(user_data: UserLogin, db: Session = Depends(get_db)):
+    user = authenticate_user(db, user_data.username, user_data.password)
+    if not user:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials"
         )
 
-    token = create_access_token(data={"sub": user_obj.username})
+    token = create_access_token(data={"sub": user.username})
+    accuracy_rate = (user.correct_predictions / user.total_predictions * 100) if user.total_predictions > 0 else 0
+    
     return {
-        "token": token, 
-        "id": user_obj.id, 
-        "username": user_obj.username,
-        "wins": user_obj.wins,
-        "losses": user_obj.losses,
-        "profit": float(user_obj.profit)
+        "token": token,
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "balance": float(user.balance),
+            "total_predictions": user.total_predictions,
+            "correct_predictions": user.correct_predictions,
+            "accuracy_rate": round(accuracy_rate, 1)
+        }
     }
 
-# Get current authenticated user from token
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
-) -> User:
+# Get current user
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     payload = decode_access_token(token)
     username = payload.get("sub")
     if username is None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials"
         )
     
     user = db.query(User).filter(User.username == username).first()
     if user is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
     
     return user
 
-@app.get("/me")
+@app.get("/auth/me")
 def get_me(current_user: User = Depends(get_current_user)):
+    accuracy_rate = (current_user.correct_predictions / current_user.total_predictions * 100) if current_user.total_predictions > 0 else 0
     return {
-        "id": current_user.id, 
+        "id": current_user.id,
         "username": current_user.username,
-        "wins": current_user.wins,
-        "losses": current_user.losses,
-        "profit": float(current_user.profit)
+        "balance": float(current_user.balance),
+        "total_predictions": current_user.total_predictions,
+        "correct_predictions": current_user.correct_predictions,
+        "accuracy_rate": round(accuracy_rate, 1)
     }
 
-@app.post("/update-stats")
-def update_player_stats(
-    stats_update: StatsUpdateRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Update player statistics after a game"""
-    try:
-        # Verify the user is updating their own stats or has permission
-        target_user = db.query(User).filter(User.id == stats_update.user_id).first()
-        if not target_user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        # For now, allow users to update their own stats
-        # In production, this should be called by the game server with proper auth
-        if target_user.id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Cannot update other user's stats"
-            )
-        
-        # Update statistics
-        target_user.wins += stats_update.wins
-        target_user.losses += stats_update.losses
-        target_user.profit += stats_update.profit
-        
-        db.commit()
-        db.refresh(target_user)
-        
-        return {
-            "success": True,
-            "message": "Stats updated successfully",
-            "updated_stats": {
-                "wins": target_user.wins,
-                "losses": target_user.losses,
-                "profit": float(target_user.profit)
-            }
-        }
-        
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update stats: {str(e)}"
-        )
+# Trend endpoints
+@app.get("/trends/categories")
+def get_categories(db: Session = Depends(get_db)):
+    categories = db.query(TrendCategory).filter(TrendCategory.is_active == True).all()
+    return categories
 
-@app.post("/game-result")
-def record_game_result(
-    user_id: int,
-    game_type: str,
-    won: bool,
-    score: float = 0.0,
+@app.get("/trends")
+def get_trends(
+    category_id: Optional[int] = None,
+    active_only: bool = True,
+    db: Session = Depends(get_db)
+):
+    query = db.query(Trend)
+    
+    if active_only:
+        query = query.filter(Trend.is_active == True, Trend.is_resolved == False)
+    
+    if category_id:
+        query = query.filter(Trend.category_id == category_id)
+    
+    trends = query.order_by(Trend.deadline.asc()).all()
+    return trends
+
+@app.post("/trends")
+def create_trend(
+    trend_data: TrendCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Record the result of a game for a specific user"""
-    try:
-        target_user = db.query(User).filter(User.id == user_id).first()
-        if not target_user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        # Update wins/losses
-        if won:
-            target_user.wins += 1
-            # Winner bonus
-            profit_change = score + 100  # Base win bonus
-        else:
-            target_user.losses += 1
-            profit_change = score  # Points earned even in loss
-        
-        target_user.profit += profit_change
-        
-        db.commit()
-        db.refresh(target_user)
-        
-        return {
-            "success": True,
-            "message": f"Game result recorded - {'Win' if won else 'Loss'}",
-            "profit_change": profit_change,
-            "new_stats": {
-                "wins": target_user.wins,
-                "losses": target_user.losses,
-                "profit": float(target_user.profit),
-                "win_rate": round((target_user.wins / max(target_user.wins + target_user.losses, 1)) * 100, 1)
-            }
-        }
-        
-    except Exception as e:
-        db.rollback()
+    trend = Trend(
+        title=trend_data.title,
+        description=trend_data.description,
+        category_id=trend_data.category_id,
+        target_value=trend_data.target_value,
+        deadline=trend_data.deadline,
+        creator_id=current_user.id
+    )
+    
+    db.add(trend)
+    db.commit()
+    db.refresh(trend)
+    return trend
+
+@app.post("/predictions")
+def create_prediction(
+    prediction_data: PredictionCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Check if user has sufficient balance
+    if current_user.balance < prediction_data.stake_amount:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to record game result: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Insufficient balance"
         )
+    
+    # Check if trend exists and is active
+    trend = db.query(Trend).filter(
+        Trend.id == prediction_data.trend_id,
+        Trend.is_active == True,
+        Trend.is_resolved == False
+    ).first()
+    
+    if not trend:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Trend not found or inactive"
+        )
+    
+    # Calculate potential payout (simple 2:1 for now)
+    potential_payout = prediction_data.stake_amount * 2
+    
+    prediction = Prediction(
+        user_id=current_user.id,
+        trend_id=prediction_data.trend_id,
+        prediction=prediction_data.prediction,
+        confidence=prediction_data.confidence,
+        stake_amount=prediction_data.stake_amount,
+        potential_payout=potential_payout
+    )
+    
+    # Deduct stake from user balance
+    current_user.balance -= Decimal(str(prediction_data.stake_amount))
+    
+    db.add(prediction)
+    db.commit()
+    db.refresh(prediction)
+    
+    return {"message": "Prediction created successfully", "prediction": prediction}
+
+@app.get("/predictions/my")
+def get_my_predictions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    predictions = db.query(Prediction).filter(
+        Prediction.user_id == current_user.id
+    ).order_by(Prediction.created_at.desc()).all()
+    
+    return predictions
 
 @app.get("/leaderboard")
-def get_leaderboard(db: Session = Depends(get_db), limit: int = 10):
-    """Get the top players leaderboard"""
-    try:
-        # Get top players by wins, then by profit
-        top_players = db.query(User).order_by(
-            User.wins.desc(), 
-            User.profit.desc()
-        ).limit(limit).all()
-        
-        leaderboard = []
-        for i, player in enumerate(top_players):
-            total_games = player.wins + player.losses
-            win_rate = (player.wins / total_games * 100) if total_games > 0 else 0
-            
-            leaderboard.append({
-                "rank": i + 1,
-                "username": player.username,
-                "wins": player.wins,
-                "losses": player.losses,
-                "win_rate": round(win_rate, 1),
-                "profit": float(player.profit),
-                "total_games": total_games
-            })
-        
-        return {
-            "leaderboard": leaderboard,
-            "total_players": db.query(User).count()
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get leaderboard: {str(e)}"
-        )
+def get_leaderboard(db: Session = Depends(get_db)):
+    users = db.query(User).filter(
+        User.total_predictions > 0
+    ).order_by(
+        (User.correct_predictions / User.total_predictions).desc(),
+        User.total_predictions.desc()
+    ).limit(10).all()
+    
+    leaderboard = []
+    for i, user in enumerate(users):
+        accuracy = (user.correct_predictions / user.total_predictions * 100) if user.total_predictions > 0 else 0
+        leaderboard.append({
+            "rank": i + 1,
+            "username": user.username,
+            "accuracy_rate": round(accuracy, 1),
+            "total_predictions": user.total_predictions,
+            "correct_predictions": user.correct_predictions
+        })
+    
+    return leaderboard
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "service": "gamble-royale-backend", "version": "2.0"}
+    return {"status": "healthy", "service": "trendbet-api", "version": "1.0.0"}
 
-@app.get("/stats/summary")
-def get_stats_summary(db: Session = Depends(get_db)):
-    """Get overall platform statistics"""
-    try:
-        total_users = db.query(User).count()
-        total_games = db.query(User.wins + User.losses).scalar() or 0
-        top_player = db.query(User).order_by(User.wins.desc()).first()
-        
-        return {
-            "total_users": total_users,
-            "total_games_played": total_games,
-            "top_player": {
-                "username": top_player.username if top_player else None,
-                "wins": top_player.wins if top_player else 0
-            } if top_player else None,
-            "platform_stats": {
-                "active": True,
-                "version": "2.0",
-                "features": ["balance_game", "real_time_multiplayer", "statistics"]
-            }
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get platform stats: {str(e)}"
-        )
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
