@@ -5,6 +5,7 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from fastapi import HTTPException, status, Depends  # Added Depends
 from fastapi.security import OAuth2PasswordBearer  # Added OAuth2PasswordBearer
+from database import SessionLocal
 
 # Configuration
 SECRET_KEY = "key"
