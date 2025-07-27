@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import AttentionTarget, AttentionHistory
 import logging
+from dotenv import load_dotenv
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 class SerpAPIService:
     def __init__(self):
+        load_dotenv() # Loads variables from .env
         self.api_key = os.getenv("SERPAPI_KEY")
         if not self.api_key:
             raise ValueError("SERPAPI_KEY environment variable is required")

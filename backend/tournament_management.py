@@ -10,6 +10,7 @@ from sqlalchemy import desc
 from database import SessionLocal
 from models import Tournament, TournamentEntry, User, TargetType, TournamentDuration
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 

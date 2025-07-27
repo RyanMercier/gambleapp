@@ -3,12 +3,16 @@ from models import User
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Depends  # Added Depends
+from fastapi.security import OAuth2PasswordBearer  # Added OAuth2PasswordBearer
 
 # Configuration
 SECRET_KEY = "key"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+
+# Setup OAuth2 password bearer scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -48,7 +52,18 @@ def decode_access_token(token: str) -> dict:
             detail="Invalid or expired token",
         )
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+# Added dependency for get_db (example implementation)
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme), 
+    db: Session = Depends(get_db)  # Fixed dependencies
+) -> User:
     payload = decode_access_token(token)
     username = payload.get("sub")
     if username is None:
