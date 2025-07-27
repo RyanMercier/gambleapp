@@ -6,9 +6,12 @@ from datetime import datetime, timedelta
 from fastapi import HTTPException, status, Depends  # Added Depends
 from fastapi.security import OAuth2PasswordBearer  # Added OAuth2PasswordBearer
 from database import SessionLocal
+from dotenv import load_dotenv
+import os
 
 # Configuration
-SECRET_KEY = "key"
+load_dotenv()  # Load environment variables from .env file
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
