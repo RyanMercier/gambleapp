@@ -1,339 +1,300 @@
 # TrendBet 📈
 
-> The world's first attention economy trading platform where users bet on what (or who) will capture public attention.
+> The world's first attention economy trading platform where users trade attention like stocks across Politicians, Billionaires, Countries, and Meme Stocks.
 
-## Table of Contents
+## 🎯 Core Concept
 
-- [Overview](#overview)
-- [Market Validation](#market-validation)
-- [Core Concept](#core-concept)
-- [Technical Stack](#technical-stack)
-- [Features](#features)
-- [Architecture](#architecture)
-- [Data Sources](#data-sources)
-- [Game Mechanics](#game-mechanics)
-- [Development Timeline](#development-timeline)
-- [Scaling Strategy](#scaling-strategy)
-- [Getting Started](#getting-started)
-- [Contributing](#contributing)
-- [License](#license)
+**TrendBet is NOT a prediction market like Polymarket.** Instead, it's an **attention trading platform** where:
 
-## Overview
+- **Attention = Stock Price**: Google Trends data drives share prices up and down
+- **Real Trading**: Buy and sell "attention shares" with real money
+- **Portfolio Management**: Track your positions and P&L like a real trading platform  
+- **Tournaments**: Compete in daily/weekly/monthly trading competitions
+- **10% Platform Fee**: We take 10% of all entry fees and trading volume
 
-TrendBet is a revolutionary platform that gamifies the attention economy. Instead of traditional trading or prediction markets, users trade on **popularity and social influence** across four main categories:
-
-- 🏛️ **Politicians** - Popularity trends + actual stock portfolio performance
-- 💰 **Billionaires** - Social media mentions and news coverage
-- 🌍 **Countries** - Tourism interest and trending news
-- 📈 **Stocks** - Social sentiment and meme potential (not price prediction)
-
-## Market Validation
-
-✅ **Zero Direct Competitors** - Extensive research found no platforms offering attention/popularity trading  
-✅ **Proven Market Demand** - $3B+ political betting market, millions using politician tracking sites  
-✅ **Multiple Revenue Streams** - Tournament fees, premium features, sponsored events  
-✅ **Built-in Virality** - People naturally share predictions about celebrities and politics  
-✅ **Global Scalability** - Every country has politicians, celebrities, and tourism  
-
-## Core Concept
-
-### The Attention Economy Trade
-
-Users purchase "shares" in public figures, countries, or trending topics based on predicted attention metrics:
-
-- **Real-time scoring** based on Google Trends + social media mentions
-- **Dynamic pricing** that fluctuates with actual attention data
-- **Tournament competitions** with cash prizes
-- **Cross-category events** (e.g., "Space Race Week" - Musk vs SpaceX vs USA vs NASA)
-- **Social trading** features (follow top predictors, copy strategies)
-
-### Why This Works
-
-1. **Always-on engagement** - News cycles, celebrity drama, political events happen 24/7
-2. **Network effects** - More players = more interesting predictions and social dynamics
-3. **Educational value** - Teaches users about media cycles, public attention, and influence
-4. **Cultural relevance** - Taps into existing celebrity and political obsessions
-
-## Technical Stack
-
-### Backend (Python)
-- **FastAPI** - Async web framework with auto-generated docs
-- **python-socketio** - Real-time chat and live updates
-- **PostgreSQL** - Robust database for financial/user data
-- **SQLAlchemy + Alembic** - ORM and database migrations
-- **Redis** - Caching, sessions, pub/sub for scaling
-- **Celery** - Background tasks for data fetching
-- **Stripe** - Payment processing for tournaments
-
-### Frontend (JavaScript)
-- **SvelteKit** - Reactive framework with great performance
-- **TailwindCSS** - Utility-first CSS for rapid UI development
-- **Socket.IO Client** - Real-time connection to Python backend
-- **Chart.js** - Interactive charts for trending data
-
-### Infrastructure
-- **Docker** - Containerization for consistent deployments
-- **Redis Pub/Sub** - Cross-server communication for scaling
-- **Background Workers** - Scheduled data fetching and processing
-
-## Features
-
-### Core MVP Features
-- **Real-time popularity scoring** for politicians using Google Trends + social data
-- **Multi-room chat system** (global, category-specific, tournament-specific)
-- **Tournament system** with daily, weekly, and monthly competitions
-- **User portfolios** and leaderboards
-- **Stripe integration** for tournament entry fees
-- **Background data pipeline** updating every 5-60 minutes
-
-### Advanced Features (Post-MVP)
-- **Cross-category tournaments** and events
-- **Social trading** (follow successful predictors)
-- **Premium analytics** and alerts
-- **Mobile app** with push notifications
-- **Crypto payments** and NFT rewards
-- **API access** for power users
-
-## Architecture
-
-### Database Schema
-```sql
--- Core entities
-users (id, username, email, balance, created_at)
-politicians (id, name, trend_score, last_updated)
-tournaments (id, name, entry_fee, prize_pool, start_date, end_date)
-predictions (id, user_id, target_id, target_type, amount, timestamp)
-
--- Chat system  
-chat_rooms (id, name, type, created_at)
-messages (id, room_id, user_id, content, message_type, created_at)
-user_presence (user_id, room_name, last_seen, is_online)
-```
-
-### Real-time Architecture
-```python
-# Multi-room Socket.IO setup
-CHAT_ROOMS = {
-    'global': 'Global Chat',
-    'politicians': 'Politicians Discussion', 
-    'countries': 'Countries & Tourism',
-    'billionaires': 'Billionaires & Business',
-    'stocks': 'Trending Stocks',
-    'tournament_{id}': 'Tournament Specific'
-}
-```
-
-## Data Sources
-
-### Primary APIs
-- **SerpApi** - Google Trends data (reliable alternative to deprecated pytrends)
-- **Quiver Quantitative API** - Politician stock trades and portfolio tracking
-- **Mention API / Keyhole API** - Social media mentions and sentiment analysis
-- **Financial APIs** - Stock data and billionaire net worth tracking
-
-### Data Pipeline
-```python
-# Background tasks (Celery)
-@celery_app.task
-async def fetch_politician_trends():
-    """Updates politician popularity scores every 5 minutes"""
-    
-@celery_app.task  
-async def fetch_social_mentions():
-    """Updates billionaire and stock mention counts every 15 minutes"""
-    
-@celery_app.task
-async def calculate_tournament_results():
-    """Processes tournament outcomes and payouts"""
-```
-
-## Game Mechanics
-
-### Scoring Algorithm
-```python
-def calculate_attention_score(google_trends, social_mentions, news_articles):
-    """
-    Weighted scoring system:
-    - Google Trends: 40%
-    - Social Media Mentions: 35% 
-    - News Article Frequency: 25%
-    """
-    base_score = (trends * 0.4) + (mentions * 0.35) + (news * 0.25)
-    momentum_multiplier = calculate_momentum(historical_data)
-    return base_score * momentum_multiplier
-```
-
-### Tournament Types
-- **Lightning Rounds** - 1-4 hour competitions during major events
-- **Daily Battles** - 24-hour tournaments with modest entry fees ($1-5)
-- **Weekly Championships** - 7-day tournaments with larger prizes ($10-25 entry)
-- **Monthly Majors** - Month-long competitions with significant prize pools ($50-100 entry)
-- **Special Events** - Custom tournaments during elections, award shows, major news
-
-### Cross-Category Events
-- **Space Race Week** - Elon Musk vs SpaceX stock vs USA country score vs NASA politicians
-- **World Cup Fever** - Country tourism vs sports stocks vs athlete mentions
-- **Economic Crisis** - Fed Chair vs Warren Buffett vs banking stocks vs USA economy score
-
-## Development Timeline
-
-### Week 1: Backend Foundation
-- FastAPI project setup with Socket.IO
-- PostgreSQL database and SQLAlchemy models
-- User authentication (JWT)
-- Basic API endpoints
-- SerpApi integration for Google Trends
-- Multi-room chat system
-
-### Week 2: Real-time Features
-- Socket.IO event handlers for live updates
-- Background Celery tasks for data fetching
-- Tournament creation and management system
-- Real-time popularity score calculations
-- Chat message history and presence tracking
-
-### Week 3: Frontend & Integration
-- SvelteKit application with Socket.IO client
-- Real-time UI updates and live charts
-- Tournament participation interface
-- Stripe payment integration
-- User dashboard and portfolios
-- Deployment and initial testing
-
-### Week 4+: Polish & Launch
-- Performance optimization
-- Error handling and monitoring
-- User onboarding flow
-- Mobile responsiveness
-- Beta testing and feedback
-- Public launch preparation
-
-## Scaling Strategy
-
-### Phase 1: MVP (0-1K users)
-- Single FastAPI server
-- PostgreSQL + Redis on same server
-- Simple Socket.IO rooms
-- Basic tournament system
-
-### Phase 2: Growth (1K-10K users)
-- Load balancer with multiple FastAPI instances
-- Redis pub/sub for cross-server Socket.IO
-- Dedicated Celery workers
-- Database connection pooling
-- CDN for static assets
-
-### Phase 3: Scale (10K-100K users)
-- Microservices architecture (separate chat service)
-- Message queues (RabbitMQ/Kafka)
-- Database read replicas
-- Caching layers (Redis + CDN)
-- Geographic distribution
-
-### Phase 4: Enterprise (100K+ users)
-- Auto-scaling infrastructure
-- Advanced analytics and ML predictions
-- Mobile apps (React Native/Flutter)
-- API marketplace for third-party developers
-- International expansion
-
-## Getting Started
+## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.11+
-- PostgreSQL 14+
-- Redis 6+
-- Node.js 18+ (for frontend)
+- Docker & Docker Compose
+- SerpAPI key (free tier available at [serpapi.com](https://serpapi.com))
 
 ### Installation
 
 ```bash
-# Clone repository
+# Clone the repository
 git clone https://github.com/yourusername/trendbet
 cd trendbet
 
-# Backend setup
-cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-
-# Database setup
-createdb trendbet
-alembic upgrade head
-
-# Frontend setup  
-cd ../frontend
-npm install
-
-# Environment variables
+# Copy environment template
 cp .env.example .env
-# Edit .env with your API keys and database credentials
+
+# Add your SerpAPI key to .env
+# SERPAPI_KEY=your_actual_key_here
+
+# Start the platform
+chmod +x scripts/start.sh
+./scripts/start.sh
 ```
 
-### Development
+The platform will be available at:
+- **Frontend**: http://localhost:3000
+- **API**: http://localhost:8000
+- **API Docs**: http://localhost:8000/docs
 
+## 📊 How It Works
+
+### 1. Attention Data → Share Prices
+```
+Google Trends Score (0-100) → Real-time share price adjustments
+📈 High attention = Higher price
+📉 Low attention = Lower price
+```
+
+### 2. Four Trading Categories
+- **🏛️ Politicians**: Trump, Biden, DeSantis, etc.
+- **💰 Billionaires**: Musk, Bezos, Gates, etc.  
+- **🌍 Countries**: USA, China, Japan, etc.
+- **📈 Meme Stocks**: Tesla, GameStop, Bitcoin, etc.
+
+### 3. Tournament Structure
+- **⚡ Daily**: 24hr competitions ($10 entry)
+- **📅 Weekly**: 7-day battles ($25 entry)
+- **🗓️ Monthly**: Championship tournaments ($50 entry)
+
+**Prize Distribution**: 50% to 1st place, 30% to 2nd, 20% to 3rd
+**Platform Revenue**: 10% of all entry fees
+
+## 🛠️ Technical Architecture
+
+### Backend (Python)
+```
+FastAPI + SQLAlchemy + PostgreSQL
+├── Real-time SerpAPI integration
+├── Background workers for data updates  
+├── Tournament management system
+├── Portfolio and P&L calculations
+└── RESTful API with WebSocket support
+```
+
+### Frontend (JavaScript)
+```
+SvelteKit + TailwindCSS + Chart.js
+├── Real-time attention charts
+├── Trading interface
+├── Portfolio dashboard
+├── Tournament leaderboards
+└── Search & discovery
+```
+
+### Data Pipeline
+```
+SerpAPI (Google Trends) → Price Calculation → Database → Real-time Updates
+```
+
+## 🔥 Key Features
+
+### ✅ Implemented
+- [x] **Attention Trading Engine**: Buy/sell shares based on Google Trends
+- [x] **Search Any Term**: Instantly create tradeable attention targets
+- [x] **Real-time Charts**: Chart.js visualization of attention trends
+- [x] **Portfolio Management**: Track positions, P&L, performance
+- [x] **Tournament System**: Daily/weekly/monthly competitions
+- [x] **SerpAPI Integration**: Live Google Trends data
+- [x] **User Authentication**: JWT-based auth system
+- [x] **Responsive Design**: Mobile-optimized trading interface
+
+### 🚧 Planned Enhancements  
+- [ ] **Mobile App**: React Native trading app
+- [ ] **Advanced Analytics**: ML-powered attention predictions
+- [ ] **Social Features**: Follow top traders, share strategies
+- [ ] **API Access**: Third-party integrations
+- [ ] **Crypto Payments**: Accept Bitcoin/Ethereum
+- [ ] **Advanced Charts**: TradingView integration
+- [ ] **News Integration**: Auto-create targets from trending news
+
+## 🏗️ Database Schema
+
+```sql
+-- Core attention targets that can be traded
+attention_targets (id, name, type, search_term, current_price, attention_score)
+
+-- User portfolios with share positions  
+portfolios (user_id, target_id, shares_owned, average_price)
+
+-- All trading activity
+trades (user_id, target_id, type, shares, price, timestamp)
+
+-- Tournament competitions
+tournaments (id, name, type, duration, entry_fee, prize_pool, start/end dates)
+tournament_entries (user_id, tournament_id, entry_fee, final_pnl, rank)
+
+-- Historical attention data for charts
+attention_history (target_id, attention_score, share_price, timestamp)
+```
+
+## 📈 Business Model
+
+### Revenue Streams
+1. **Tournament Fees**: 10% of all entry fees
+2. **Trading Commissions**: Small % of trade volume (future)
+3. **Premium Features**: Advanced analytics, alerts (future)
+4. **API Access**: Paid tiers for developers (future)
+
+### Market Opportunity
+- **$3B+** prediction market size
+- **Zero direct competitors** in attention trading
+- **Viral potential**: People love trading celebrity/political attention
+- **Global scalability**: Every country has politicians and celebrities
+
+## 🚀 Deployment
+
+### Production Setup
 ```bash
-# Start backend (from backend directory)
-uvicorn main:app --reload --port 8000
+# Build for production
+docker-compose -f docker-compose.prod.yml up -d
 
-# Start Celery worker (separate terminal)
-celery -A celery_app worker --loglevel=info
-
-# Start Celery beat scheduler (separate terminal)  
-celery -A celery_app beat --loglevel=info
-
-# Start frontend (from frontend directory)
-npm run dev
+# Set up load balancer (nginx)
+# Configure SSL certificates
+# Set up monitoring (Grafana + Prometheus)
+# Configure database backups
 ```
 
 ### Environment Variables
-
 ```bash
-# Database
-DATABASE_URL=postgresql://user:password@localhost/trendbet
-REDIS_URL=redis://localhost:6379
-
-# APIs
+# Required
 SERPAPI_KEY=your_serpapi_key
-QUIVER_API_KEY=your_quiver_api_key
-MENTION_API_KEY=your_mention_api_key
+DATABASE_URL=postgresql://user:pass@host:5432/trendbet
 
-# Payments
-STRIPE_SECRET_KEY=your_stripe_secret_key
-STRIPE_WEBHOOK_SECRET=your_webhook_secret
-
-# Security
-SECRET_KEY=your_jwt_secret_key
+# Optional  
+SECRET_KEY=your-jwt-secret
+REDIS_URL=redis://localhost:6379
+STRIPE_SECRET_KEY=sk_live_... # For payments
 ```
 
-## Contributing
+## 🧪 Development
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+### Backend Development
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Run with hot reload
+uvicorn main:app --reload --port 8000
+
+# Run background workers
+python serpapi_service.py
+python tournament_management.py
+```
+
+### Frontend Development  
+```bash
+cd frontend/svelte-gambling
+npm install
+npm run dev # Starts on port 3000
+```
+
+### Database Management
+```bash
+# Reset database
+./scripts/reset.sh
+
+# Seed test data
+./scripts/seed.sh
+
+# View logs
+docker-compose logs -f backend
+```
+
+## 🔧 API Endpoints
+
+### Core Trading
+```
+POST /search              # Search any term, create tradeable target
+GET  /targets             # List all attention targets  
+GET  /targets/{id}/chart  # Historical price/attention data
+POST /trade               # Execute buy/sell orders
+GET  /portfolio           # User positions and P&L
+```
+
+### Tournaments
+```
+GET  /tournaments         # Active tournaments
+POST /tournaments/join    # Join tournament
+GET  /leaderboard         # Platform leaderboard
+```
+
+### User Management
+```
+POST /auth/register       # Create account
+POST /auth/login          # Authenticate user
+GET  /auth/me            # Get user profile
+```
+
+## 🤝 Contributing
+
+We welcome contributions! Areas where help is needed:
+
+1. **Frontend**: React Native mobile app
+2. **Backend**: ML attention prediction models  
+3. **DevOps**: Kubernetes deployment configs
+4. **Design**: UI/UX improvements
+5. **Data**: Additional data sources beyond Google Trends
 
 ### Development Process
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests for new functionality
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+```bash
+# 1. Fork the repository
+# 2. Create feature branch
+git checkout -b feature/amazing-feature
 
-## License
+# 3. Make changes and test
+./scripts/reset.sh  # Reset for testing
+npm test            # Run frontend tests
+pytest              # Run backend tests
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+# 4. Submit pull request
+```
+
+## 📋 Roadmap
+
+### Q1 2024: Core Platform
+- [x] MVP attention trading engine
+- [x] Tournament system  
+- [x] Mobile-responsive design
+- [ ] Beta launch with 100 users
+
+### Q2 2024: Growth Features  
+- [ ] Mobile app launch
+- [ ] Advanced charting with TradingView
+- [ ] Social trading features
+- [ ] Crypto payment integration
+
+### Q3 2024: Scale & Monetization
+- [ ] API marketplace launch
+- [ ] Premium analytics features  
+- [ ] International expansion
+- [ ] Series A fundraising
+
+### Q4 2024: Advanced Features
+- [ ] ML attention predictions
+- [ ] Options/derivatives trading
+- [ ] White-label platform for other markets
+- [ ] IPO preparation
+
+## 📞 Contact & Support
+
+- **Website**: https://trendbet.io
+- **Email**: hello@trendbet.io  
+- **Discord**: https://discord.gg/trendbet
+- **Twitter**: [@TrendBetHQ](https://twitter.com/trendbethq)
+
+## 📄 License
+
+Private
 
 ---
 
-## Contact
+**TrendBet** - *Where Attention Becomes Currency* 📈✨
 
-**Project Creator**: [Your Name]  
-**Email**: your.email@example.com  
-**Twitter**: [@yourusername](https://twitter.com/yourusername)
-
-**Project Link**: [https://github.com/yourusername/trendbet](https://github.com/yourusername/trendbet)
-
----
-
-*TrendBet - Where attention becomes currency* 📈✨
+*Built with FastAPI, SvelteKit, and a deep understanding of the attention economy.*
