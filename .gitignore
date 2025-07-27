@@ -1,7 +1,15 @@
-# Node modules (SvelteKit frontend)
-node_modules/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+venv/
+env/
+.venv/
+*.sqlite3
 
-# Build outputs
+# Node.js
+node_modules/
 .build/
 .svelte-kit/
 dist/
@@ -12,24 +20,24 @@ public/build/
 .env.local
 .env.*.local
 
-# Python cache files
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-
-# Python virtual environments
-venv/
-env/
-.venv/
-
-# Database files
-*.sqlite3
-
 # IDE files
 .vscode/
 .idea/
 *.iml
 
-# Mac system files
+# OS files
 .DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.sqlite
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+build/
+dist/
+.output/

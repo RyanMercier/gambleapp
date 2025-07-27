@@ -16,7 +16,7 @@
     error = '';
     loading = true;
     
-    const endpoint = mode === 'login' ? '/login' : '/register';
+    const endpoint = mode === 'login' ? '/auth/login' : '/auth/register';
     const payload = mode === 'login'
       ? { username, password }
       : { username, email, password };
@@ -27,25 +27,18 @@
         body: JSON.stringify(payload),
       });
 
-      if (!data?.token || !data?.username || !data?.id) {
-        throw new Error('Incomplete user data from server');
+      if (!data?.token || !data?.user) {
+        throw new Error('Incomplete response from server');
       }
 
       // Save token and user data
       localStorage.setItem('token', data.token);
+      localStorage.setItem('user', JSON.stringify(data.user));
       
-      const userData = {
-        id: data.id,
-        username: data.username,
-        wins: data.wins || 0,
-        losses: data.losses || 0,
-        profit: data.profit || 0
-      };
-      
-      user.set(userData);
+      user.set(data.user);
 
-      console.log('✅ Authentication successful:', userData);
-      goto('/game');
+      console.log('✅ Authentication successful');
+      goto('/dashboard');
       
     } catch (err) {
       console.error('❌ Authentication failed:', err);
@@ -65,14 +58,14 @@
 </script>
 
 <svelte:head>
-  <title>{mode === 'login' ? 'Login' : 'Register'} - Gamble Royale</title>
+  <title>{mode === 'login' ? 'Login' : 'Register'} - TrendBet</title>
 </svelte:head>
 
 <div class="min-h-screen flex items-center justify-center p-6 relative overflow-hidden">
   <!-- Background Animation -->
   <div class="absolute inset-0 opacity-20">
-    <div class="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl animate-pulse"></div>
-    <div class="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500 rounded-full mix-blend-multiply filter blur-xl animate-pulse" style="animation-delay: 1s;"></div>
+    <div class="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-500 rounded-full mix-blend-multiply filter blur-xl animate-pulse"></div>
+    <div class="absolute bottom-1/4 right-1/4 w-96 h-96 bg-indigo-500 rounded-full mix-blend-multiply filter blur-xl animate-pulse" style="animation-delay: 1s;"></div>
   </div>
 
   <!-- Login/Register Form -->
@@ -80,13 +73,13 @@
     <div class="card">
       <!-- Header -->
       <div class="text-center mb-8">
-        <h1 class="text-3xl font-bold mb-2 bg-gradient-to-r from-purple-400 to-blue-500 bg-clip-text text-transparent">
-          {mode === 'login' ? 'Welcome Back' : 'Join the Arena'}
+        <h1 class="text-3xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">
+          {mode === 'login' ? 'Welcome Back' : 'Join TrendBet'}
         </h1>
         <p class="text-gray-400">
           {mode === 'login' 
-            ? 'Sign in to continue your gaming journey' 
-            : 'Create your account and start competing'}
+            ? 'Sign in to continue forecasting' 
+            : 'Create your account and start predicting'}
         </p>
       </div>
 
@@ -164,7 +157,7 @@
               {mode === 'login' ? 'Signing in...' : 'Creating account...'}
             </div>
           {:else}
-            {mode === 'login' ? '🚀 Sign In' : '✨ Create Account'}
+            {mode === 'login' ? '🔮 Sign In' : '✨ Create Account'}
           {/if}
         </button>
 
@@ -174,7 +167,7 @@
             {mode === 'login' ? "Don't have an account?" : "Already have an account?"}
             <button
               type="button"
-              class="text-purple-400 hover:text-purple-300 font-medium ml-1 underline"
+              class="text-blue-400 hover:text-blue-300 font-medium ml-1 underline"
               on:click={switchMode}
               disabled={loading}
             >
@@ -188,16 +181,16 @@
     <!-- Benefits -->
     <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
       <div class="text-center p-4 bg-white/5 rounded-lg">
-        <div class="text-2xl mb-2">🎮</div>
-        <div class="text-xs text-gray-400">Free to Play</div>
+        <div class="text-2xl mb-2">📊</div>
+        <div class="text-xs text-gray-400">Data-Driven</div>
       </div>
       <div class="text-center p-4 bg-white/5 rounded-lg">
-        <div class="text-2xl mb-2">🏆</div>
+        <div class="text-2xl mb-2">🎯</div>
         <div class="text-xs text-gray-400">Skill Based</div>
       </div>
       <div class="text-center p-4 bg-white/5 rounded-lg">
-        <div class="text-2xl mb-2">⚡</div>
-        <div class="text-xs text-gray-400">Real Time</div>
+        <div class="text-2xl mb-2">🏆</div>
+        <div class="text-xs text-gray-400">Competitive</div>
       </div>
     </div>
   </div>
