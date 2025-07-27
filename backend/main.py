@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -6,23 +6,24 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import List, Optional
+import asyncio
+import logging
 
 from database import SessionLocal, engine
-from models import Base, User, TrendCategory, Trend, Prediction
+from models import (
+    Base, User, AttentionTarget, Portfolio, Trade, Tournament, 
+    TournamentEntry, AttentionHistory, TargetType, TournamentDuration
+)
 from auth import (
-    create_user, 
-    authenticate_user, 
-    create_access_token, 
-    decode_access_token
+    create_user, authenticate_user, create_access_token, 
+    decode_access_token, get_current_user
 )
 
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-# FastAPI app
-app = FastAPI(title="TrendBet API", version="1.0.0")
+app = FastAPI(title="TrendBet Attention Trading API", version="2.0.0")
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,6 +33,7 @@ app.add_middleware(
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+logger = logging.getLogger(__name__)
 
 # Database dependency
 def get_db():
@@ -51,34 +53,25 @@ class UserLogin(BaseModel):
     username: str
     password: str
 
-class TrendCreate(BaseModel):
-    title: str
-    description: str
-    category_id: int
-    target_value: float
-    deadline: datetime
+class TradeRequest(BaseModel):
+    target_id: int
+    trade_type: str  # 'buy' or 'sell'
+    shares: float
 
-class PredictionCreate(BaseModel):
-    trend_id: int
-    prediction: bool
-    confidence: int
-    stake_amount: float
+class SearchRequest(BaseModel):
+    query: str
+    target_type: str = "politician"
 
-class UserResponse(BaseModel):
-    id: int
-    username: str
-    balance: float
-    total_predictions: int
-    correct_predictions: int
-    accuracy_rate: float
+class TournamentEntryRequest(BaseModel):
+    tournament_id: int
 
-    class Config:
-        from_attributes = True
+# SerpAPI integration
+from serpapi_service import SerpAPIService
+serpapi_service = SerpAPIService()
 
 # Auth endpoints
 @app.post("/auth/register")
 def register(user_data: UserRegister, db: Session = Depends(get_db)):
-    # Check if user exists
     existing_user = db.query(User).filter(
         (User.username == user_data.username) | (User.email == user_data.email)
     ).first()
@@ -98,9 +91,7 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
             "id": user.id,
             "username": user.username,
             "balance": float(user.balance),
-            "total_predictions": user.total_predictions,
-            "correct_predictions": user.correct_predictions,
-            "accuracy_rate": 0.0
+            "created_at": user.created_at
         }
     }
 
@@ -114,7 +105,6 @@ def login(user_data: UserLogin, db: Session = Depends(get_db)):
         )
 
     token = create_access_token(data={"sub": user.username})
-    accuracy_rate = (user.correct_predictions / user.total_predictions * 100) if user.total_predictions > 0 else 0
     
     return {
         "token": token,
@@ -122,169 +112,464 @@ def login(user_data: UserLogin, db: Session = Depends(get_db)):
             "id": user.id,
             "username": user.username,
             "balance": float(user.balance),
-            "total_predictions": user.total_predictions,
-            "correct_predictions": user.correct_predictions,
-            "accuracy_rate": round(accuracy_rate, 1)
+            "created_at": user.created_at
         }
     }
 
-# Get current user
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
-    payload = decode_access_token(token)
-    username = payload.get("sub")
-    if username is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials"
-        )
-    
-    user = db.query(User).filter(User.username == username).first()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    return user
-
 @app.get("/auth/me")
 def get_me(current_user: User = Depends(get_current_user)):
-    accuracy_rate = (current_user.correct_predictions / current_user.total_predictions * 100) if current_user.total_predictions > 0 else 0
     return {
         "id": current_user.id,
         "username": current_user.username,
         "balance": float(current_user.balance),
-        "total_predictions": current_user.total_predictions,
-        "correct_predictions": current_user.correct_predictions,
-        "accuracy_rate": round(accuracy_rate, 1)
+        "created_at": current_user.created_at
     }
 
-# Trend endpoints
-@app.get("/trends/categories")
-def get_categories(db: Session = Depends(get_db)):
-    categories = db.query(TrendCategory).filter(TrendCategory.is_active == True).all()
-    return categories
-
-@app.get("/trends")
-def get_trends(
-    category_id: Optional[int] = None,
-    active_only: bool = True,
+# Attention targets endpoints
+@app.get("/targets")
+def get_targets(
+    target_type: Optional[str] = None,
+    limit: int = Query(50, le=100),
     db: Session = Depends(get_db)
 ):
-    query = db.query(Trend)
+    """Get all attention targets, optionally filtered by type"""
+    query = db.query(AttentionTarget).filter(AttentionTarget.is_active == True)
     
-    if active_only:
-        query = query.filter(Trend.is_active == True, Trend.is_resolved == False)
+    if target_type:
+        try:
+            target_type_enum = TargetType(target_type)
+            query = query.filter(AttentionTarget.type == target_type_enum)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid target type")
     
-    if category_id:
-        query = query.filter(Trend.category_id == category_id)
+    targets = query.order_by(AttentionTarget.current_attention_score.desc()).limit(limit).all()
     
-    trends = query.order_by(Trend.deadline.asc()).all()
-    return trends
+    result = []
+    for target in targets:
+        result.append({
+            "id": target.id,
+            "name": target.name,
+            "type": target.type.value,
+            "description": target.description,
+            "current_price": float(target.current_share_price),
+            "attention_score": float(target.current_attention_score),
+            "last_updated": target.last_updated
+        })
+    
+    return result
 
-@app.post("/trends")
-def create_trend(
-    trend_data: TrendCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    trend = Trend(
-        title=trend_data.title,
-        description=trend_data.description,
-        category_id=trend_data.category_id,
-        target_value=trend_data.target_value,
-        deadline=trend_data.deadline,
-        creator_id=current_user.id
-    )
+@app.get("/targets/{target_id}")
+def get_target(target_id: int, db: Session = Depends(get_db)):
+    """Get specific target details"""
+    target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
     
-    db.add(trend)
-    db.commit()
-    db.refresh(trend)
-    return trend
+    return {
+        "id": target.id,
+        "name": target.name,
+        "type": target.type.value,
+        "description": target.description,
+        "current_price": float(target.current_share_price),
+        "attention_score": float(target.current_attention_score),
+        "search_term": target.search_term,
+        "last_updated": target.last_updated
+    }
 
-@app.post("/predictions")
-def create_prediction(
-    prediction_data: PredictionCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    # Check if user has sufficient balance
-    if current_user.balance < prediction_data.stake_amount:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Insufficient balance"
-        )
+@app.get("/targets/{target_id}/chart")
+def get_target_chart(target_id: int, days: int = Query(7, le=30), db: Session = Depends(get_db)):
+    """Get historical attention and price data for charts"""
+    target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
     
-    # Check if trend exists and is active
-    trend = db.query(Trend).filter(
-        Trend.id == prediction_data.trend_id,
-        Trend.is_active == True,
-        Trend.is_resolved == False
+    # Get historical data
+    start_date = datetime.utcnow() - timedelta(days=days)
+    history = db.query(AttentionHistory).filter(
+        AttentionHistory.target_id == target_id,
+        AttentionHistory.timestamp >= start_date
+    ).order_by(AttentionHistory.timestamp.asc()).all()
+    
+    chart_data = {
+        "target": {
+            "id": target.id,
+            "name": target.name,
+            "type": target.type.value
+        },
+        "data": []
+    }
+    
+    for entry in history:
+        chart_data["data"].append({
+            "timestamp": entry.timestamp.isoformat(),
+            "attention_score": float(entry.attention_score),
+            "share_price": float(entry.share_price)
+        })
+    
+    return chart_data
+
+@app.post("/search")
+async def search_trends(search_data: SearchRequest, db: Session = Depends(get_db)):
+    """Search for any term and get its attention data"""
+    
+    # Get current Google Trends data
+    trends_data = await serpapi_service.get_google_trends_data(search_data.query)
+    attention_score = trends_data.get("attention_score", 0.0)
+    
+    # Check if target already exists
+    existing_target = db.query(AttentionTarget).filter(
+        AttentionTarget.search_term.ilike(f"%{search_data.query}%")
     ).first()
     
-    if not trend:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Trend not found or inactive"
+    if existing_target:
+        # Update existing target
+        new_price = serpapi_service.calculate_new_price(
+            float(existing_target.current_share_price),
+            attention_score,
+            float(existing_target.current_attention_score)
         )
+        
+        existing_target.current_attention_score = Decimal(str(attention_score))
+        existing_target.current_share_price = Decimal(str(new_price))
+        existing_target.last_updated = datetime.utcnow()
+        
+        # Save history
+        history = AttentionHistory(
+            target_id=existing_target.id,
+            attention_score=Decimal(str(attention_score)),
+            share_price=Decimal(str(new_price))
+        )
+        db.add(history)
+        db.commit()
+        
+        target_id = existing_target.id
+    else:
+        # Create new target
+        try:
+            target_type_enum = TargetType(search_data.target_type)
+        except ValueError:
+            target_type_enum = TargetType.POLITICIAN
+        
+        new_target = AttentionTarget(
+            name=search_data.query.title(),
+            type=target_type_enum,
+            search_term=search_data.query,
+            current_attention_score=Decimal(str(attention_score)),
+            current_share_price=Decimal("10.00"),  # Starting price
+            description=f"Attention score for {search_data.query}"
+        )
+        db.add(new_target)
+        db.commit()
+        db.refresh(new_target)
+        
+        # Initial history entry
+        history = AttentionHistory(
+            target_id=new_target.id,
+            attention_score=Decimal(str(attention_score)),
+            share_price=Decimal("10.00")
+        )
+        db.add(history)
+        db.commit()
+        
+        target_id = new_target.id
     
-    # Calculate potential payout (simple 2:1 for now)
-    potential_payout = prediction_data.stake_amount * 2
-    
-    prediction = Prediction(
-        user_id=current_user.id,
-        trend_id=prediction_data.trend_id,
-        prediction=prediction_data.prediction,
-        confidence=prediction_data.confidence,
-        stake_amount=prediction_data.stake_amount,
-        potential_payout=potential_payout
-    )
-    
-    # Deduct stake from user balance
-    current_user.balance -= Decimal(str(prediction_data.stake_amount))
-    
-    db.add(prediction)
-    db.commit()
-    db.refresh(prediction)
-    
-    return {"message": "Prediction created successfully", "prediction": prediction}
+    return {
+        "target_id": target_id,
+        "query": search_data.query,
+        "current_attention_score": attention_score,
+        "message": "Target data updated successfully"
+    }
 
-@app.get("/predictions/my")
-def get_my_predictions(
+# Trading endpoints
+@app.post("/trade")
+def execute_trade(
+    trade_data: TradeRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    predictions = db.query(Prediction).filter(
-        Prediction.user_id == current_user.id
-    ).order_by(Prediction.created_at.desc()).all()
+    """Execute a buy or sell trade"""
+    target = db.query(AttentionTarget).filter(AttentionTarget.id == trade_data.target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
     
-    return predictions
+    if trade_data.shares <= 0:
+        raise HTTPException(status_code=400, detail="Shares must be positive")
+    
+    current_price = float(target.current_share_price)
+    total_cost = trade_data.shares * current_price
+    
+    if trade_data.trade_type == "buy":
+        # Check if user has enough balance
+        if current_user.balance < Decimal(str(total_cost)):
+            raise HTTPException(status_code=400, detail="Insufficient balance")
+        
+        # Deduct from balance
+        current_user.balance -= Decimal(str(total_cost))
+        
+        # Update or create portfolio entry
+        portfolio = db.query(Portfolio).filter(
+            Portfolio.user_id == current_user.id,
+            Portfolio.target_id == trade_data.target_id
+        ).first()
+        
+        if portfolio:
+            # Update existing position
+            total_shares = float(portfolio.shares_owned) + trade_data.shares
+            total_cost_basis = (float(portfolio.shares_owned) * float(portfolio.average_price)) + total_cost
+            portfolio.shares_owned = Decimal(str(total_shares))
+            portfolio.average_price = Decimal(str(total_cost_basis / total_shares)) if total_shares > 0 else Decimal(str(current_price))
+        else:
+            # Create new position
+            portfolio = Portfolio(
+                user_id=current_user.id,
+                target_id=trade_data.target_id,
+                shares_owned=Decimal(str(trade_data.shares)),
+                average_price=Decimal(str(current_price))
+            )
+            db.add(portfolio)
+    
+    elif trade_data.trade_type == "sell":
+        # Check if user has enough shares
+        portfolio = db.query(Portfolio).filter(
+            Portfolio.user_id == current_user.id,
+            Portfolio.target_id == trade_data.target_id
+        ).first()
+        
+        if not portfolio or float(portfolio.shares_owned) < trade_data.shares:
+            raise HTTPException(status_code=400, detail="Insufficient shares")
+        
+        # Update portfolio
+        portfolio.shares_owned -= Decimal(str(trade_data.shares))
+        
+        # Add to balance
+        current_user.balance += Decimal(str(total_cost))
+    else:
+        raise HTTPException(status_code=400, detail="Invalid trade type")
+    
+    # Record the trade
+    trade = Trade(
+        user_id=current_user.id,
+        target_id=trade_data.target_id,
+        trade_type=trade_data.trade_type,
+        shares=Decimal(str(trade_data.shares)),
+        price_per_share=Decimal(str(current_price)),
+        total_amount=Decimal(str(total_cost))
+    )
+    db.add(trade)
+    
+    db.commit()
+    
+    return {
+        "message": "Trade executed successfully",
+        "trade_type": trade_data.trade_type,
+        "shares": trade_data.shares,
+        "price_per_share": current_price,
+        "total_amount": total_cost,
+        "new_balance": float(current_user.balance)
+    }
+
+@app.get("/portfolio")
+def get_portfolio(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get user's portfolio with current P&L"""
+    portfolios = db.query(Portfolio).filter(
+        Portfolio.user_id == current_user.id,
+        Portfolio.shares_owned > 0
+    ).all()
+    
+    total_value = 0
+    total_cost = 0
+    positions = []
+    
+    for portfolio in portfolios:
+        target = portfolio.target
+        current_price = float(target.current_share_price)
+        shares_owned = float(portfolio.shares_owned)
+        avg_price = float(portfolio.average_price)
+        
+        position_value = shares_owned * current_price
+        position_cost = shares_owned * avg_price
+        pnl = position_value - position_cost
+        pnl_percent = (pnl / position_cost * 100) if position_cost > 0 else 0
+        
+        positions.append({
+            "target_id": target.id,
+            "target_name": target.name,
+            "target_type": target.type.value,
+            "shares_owned": shares_owned,
+            "average_price": avg_price,
+            "current_price": current_price,
+            "position_value": position_value,
+            "position_cost": position_cost,
+            "pnl": pnl,
+            "pnl_percent": pnl_percent
+        })
+        
+        total_value += position_value
+        total_cost += position_cost
+    
+    total_pnl = total_value - total_cost
+    total_pnl_percent = (total_pnl / total_cost * 100) if total_cost > 0 else 0
+    
+    return {
+        "cash_balance": float(current_user.balance),
+        "portfolio_value": total_value,
+        "total_value": float(current_user.balance) + total_value,
+        "total_pnl": total_pnl,
+        "total_pnl_percent": total_pnl_percent,
+        "positions": positions
+    }
+
+@app.get("/trades/my")
+def get_my_trades(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get user's trade history"""
+    trades = db.query(Trade).filter(
+        Trade.user_id == current_user.id
+    ).order_by(Trade.timestamp.desc()).limit(50).all()
+    
+    result = []
+    for trade in trades:
+        target = trade.target
+        result.append({
+            "id": trade.id,
+            "target_id": target.id,
+            "target_name": target.name,
+            "target_type": target.type.value,
+            "trade_type": trade.trade_type,
+            "shares": float(trade.shares),
+            "price_per_share": float(trade.price_per_share),
+            "total_amount": float(trade.total_amount),
+            "timestamp": trade.timestamp
+        })
+    
+    return result
+
+# Tournament endpoints
+@app.get("/tournaments")
+def get_tournaments(db: Session = Depends(get_db)):
+    """Get active tournaments"""
+    tournaments = db.query(Tournament).filter(
+        Tournament.is_active == True,
+        Tournament.end_date > datetime.utcnow()
+    ).order_by(Tournament.start_date.asc()).all()
+    
+    result = []
+    for tournament in tournaments:
+        entry_count = db.query(TournamentEntry).filter(TournamentEntry.tournament_id == tournament.id).count()
+        
+        result.append({
+            "id": tournament.id,
+            "name": tournament.name,
+            "target_type": tournament.target_type.value,
+            "duration": tournament.duration.value,
+            "entry_fee": float(tournament.entry_fee),
+            "prize_pool": float(tournament.prize_pool),
+            "start_date": tournament.start_date,
+            "end_date": tournament.end_date,
+            "participants": entry_count
+        })
+    
+    return result
+
+@app.post("/tournaments/join")
+def join_tournament(
+    entry_data: TournamentEntryRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Join a tournament"""
+    tournament = db.query(Tournament).filter(Tournament.id == entry_data.tournament_id).first()
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+    
+    # Check if already joined
+    existing_entry = db.query(TournamentEntry).filter(
+        TournamentEntry.tournament_id == entry_data.tournament_id,
+        TournamentEntry.user_id == current_user.id
+    ).first()
+    
+    if existing_entry:
+        raise HTTPException(status_code=400, detail="Already joined this tournament")
+    
+    # Check balance
+    if current_user.balance < tournament.entry_fee:
+        raise HTTPException(status_code=400, detail="Insufficient balance")
+    
+    # Deduct entry fee (10% goes to platform)
+    platform_fee = tournament.entry_fee * Decimal('0.10')
+    prize_contribution = tournament.entry_fee - platform_fee
+    
+    current_user.balance -= tournament.entry_fee
+    tournament.prize_pool += prize_contribution
+    
+    # Create tournament entry
+    entry = TournamentEntry(
+        tournament_id=entry_data.tournament_id,
+        user_id=current_user.id,
+        entry_fee_paid=tournament.entry_fee
+    )
+    db.add(entry)
+    
+    db.commit()
+    
+    return {"message": "Successfully joined tournament", "entry_fee": float(tournament.entry_fee)}
 
 @app.get("/leaderboard")
 def get_leaderboard(db: Session = Depends(get_db)):
-    users = db.query(User).filter(
-        User.total_predictions > 0
-    ).order_by(
-        (User.correct_predictions / User.total_predictions).desc(),
-        User.total_predictions.desc()
-    ).limit(10).all()
+    """Get platform leaderboard based on total portfolio value"""
+    # This is a simplified leaderboard - could be enhanced with different metrics
+    users = db.query(User).filter(User.is_active == True).all()
     
     leaderboard = []
-    for i, user in enumerate(users):
-        accuracy = (user.correct_predictions / user.total_predictions * 100) if user.total_predictions > 0 else 0
+    for user in users:
+        # Calculate total portfolio value
+        portfolios = db.query(Portfolio).filter(
+            Portfolio.user_id == user.id,
+            Portfolio.shares_owned > 0
+        ).all()
+        
+        portfolio_value = 0
+        for portfolio in portfolios:
+            target = portfolio.target
+            portfolio_value += float(portfolio.shares_owned) * float(target.current_share_price)
+        
+        total_value = float(user.balance) + portfolio_value
+        
         leaderboard.append({
-            "rank": i + 1,
             "username": user.username,
-            "accuracy_rate": round(accuracy, 1),
-            "total_predictions": user.total_predictions,
-            "correct_predictions": user.correct_predictions
+            "total_value": total_value,
+            "cash_balance": float(user.balance),
+            "portfolio_value": portfolio_value
         })
     
-    return leaderboard
+    # Sort by total value
+    leaderboard.sort(key=lambda x: x["total_value"], reverse=True)
+    
+    # Add ranks
+    for i, entry in enumerate(leaderboard[:10]):  # Top 10
+        entry["rank"] = i + 1
+    
+    return leaderboard[:10]
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "service": "trendbet-api", "version": "1.0.0"}
+    return {"status": "healthy", "service": "trendbet-attention-trading", "version": "2.0.0"}
+
+# Background tasks
+async def start_background_tasks():
+    """Start background data update tasks"""
+    from serpapi_service import run_data_updates
+    from tournament_management import tournament_management_task
+    
+    # Start both tasks concurrently
+    await asyncio.gather(
+        run_data_updates(),
+        tournament_management_task()
+    )
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background tasks when server starts"""
+    asyncio.create_task(start_background_tasks())
 
 if __name__ == "__main__":
     import uvicorn
