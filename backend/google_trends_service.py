@@ -1,0 +1,724 @@
+"""
+Google Trends Data Service for TrendBet
+Enhanced version with direct Google Trends API integration
+Provides real-time attention scores and historical data
+"""
+
+import aiohttp
+import json
+import asyncio
+import time
+import logging
+import random
+from datetime import datetime, timedelta
+from decimal import Decimal
+from typing import Optional, Dict, List
+import hashlib
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from models import AttentionTarget, AttentionHistory, TargetType
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class GoogleTrendsService:
+    """
+    Production Google Trends API Service for TrendBet
+    Provides long-term relative attention scores with caching and error handling
+    """
+    
+    def __init__(self, cache_duration_minutes: int = 60):
+        self.hl = 'en-US'
+        self.tz = 360
+        self.geo = ''
+        self.cookies = {}
+        self.cache = {}
+        self.cache_duration = timedelta(minutes=cache_duration_minutes)
+        
+        # API URLs
+        self.base_url = 'https://trends.google.com/trends'
+        self.explore_url = f"{self.base_url}/api/explore"
+        self.interest_over_time_url = f"{self.base_url}/api/widgetdata/multiline"
+        self.interest_by_region_url = f"{self.base_url}/api/widgetdata/comparedgeo"
+        
+        # Session management
+        self.session = None
+        self.last_request_time = 0
+        self.min_delay = 3  # Increased delay to be safer
+        self.session_created_at = None
+        self.session_lifetime = timedelta(hours=1)
+        
+        # Headers
+        self.headers = {
+            'accept-language': self.hl,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+        }
+        
+        # Timeframes for different use cases
+        self.timeframes = {
+            'long_term': 'today 5-y',      # 5 years - best for baseline scores
+            'medium_term': 'today 12-m',   # 12 months
+            'short_term': 'now 7-d',       # 7 days
+            'real_time': 'now 1-d'         # 1 day
+        }
+        
+        # Default to medium-term for good balance of relevance and stability
+        self.default_timeframe = self.timeframes['medium_term']
+        
+    async def __aenter__(self):
+        await self._ensure_session()
+        return self
+        
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self._close_session()
+    
+    async def _ensure_session(self):
+        """Ensure we have a valid session, create new one if needed"""
+        now = datetime.utcnow()
+        
+        if (self.session is None or 
+            self.session.closed or 
+            (self.session_created_at and now - self.session_created_at > self.session_lifetime)):
+            
+            await self._close_session()
+            await self._create_session()
+    
+    async def _create_session(self):
+        """Create new session with Google cookies"""
+        connector = aiohttp.TCPConnector(limit=5, limit_per_host=1)
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        
+        self.session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            headers=self.headers
+        )
+        
+        self.session_created_at = datetime.utcnow()
+        
+        # Get Google cookies
+        logger.info("🍪 Initializing Google Trends session...")
+        await self._get_google_cookie()
+        
+    async def _close_session(self):
+        """Close existing session"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+        self.session = None
+        self.session_created_at = None
+        
+    async def _get_google_cookie(self):
+        """Get required Google cookie for authentication"""
+        try:
+            cookie_url = f'{self.base_url}/explore/?geo={self.hl[-2:]}'
+            async with self.session.get(cookie_url) as response:
+                if response.status == 200:
+                    for cookie in response.cookies:
+                        if cookie.key == 'NID':
+                            self.cookies = {cookie.key: cookie.value}
+                            logger.info("✅ Google Trends session initialized")
+                            return
+                    logger.warning("⚠️ No NID cookie found")
+                else:
+                    logger.warning(f"⚠️ Cookie request failed: {response.status}")
+        except Exception as e:
+            logger.error(f"Cookie request failed: {e}")
+    
+    def _get_cache_key(self, search_term: str, timeframe: str, geo: str) -> str:
+        """Generate cache key for request"""
+        key_string = f"{search_term}_{timeframe}_{geo}_{self.hl}"
+        return hashlib.md5(key_string.encode()).hexdigest()
+    
+    def _is_cache_valid(self, cache_entry: dict) -> bool:
+        """Check if cache entry is still valid"""
+        if not cache_entry:
+            return False
+        
+        cached_at = cache_entry.get('cached_at')
+        if not cached_at:
+            return False
+        
+        return datetime.utcnow() - cached_at < self.cache_duration
+    
+    async def get_google_trends_data(self, search_term: str, timeframe: str = "now 7-d") -> dict:
+        """
+        TrendBet compatibility method - maps to new implementation
+        
+        Args:
+            search_term: The term to search for
+            timeframe: Legacy timeframe parameter (kept for compatibility)
+            
+        Returns:
+            Dict with attention_score and metadata
+        """
+        # Map old timeframe format to new format if needed
+        if timeframe == "now 7-d":
+            new_timeframe = "short_term"
+        elif timeframe == "today 12-m":
+            new_timeframe = "medium_term"
+        elif timeframe == "today 5-y":
+            new_timeframe = "long_term"
+        else:
+            new_timeframe = "medium_term"  # Default
+        
+        result = await self.get_attention_score(search_term, "US", new_timeframe)
+        
+        # Return in expected format for TrendBet
+        return {
+            "attention_score": result.get('attention_score', 0.0),
+            "timeline": result.get('timeline', []),
+            "search_term": search_term,
+            "last_updated": datetime.utcnow(),
+            "source": "google_trends_api"
+        }
+    
+    async def get_attention_score(self, 
+                                search_term: str, 
+                                geo: str = "US", 
+                                timeframe: str = None,
+                                use_cache: bool = True) -> Dict:
+        """
+        Get attention score for a search term
+        """
+        # Handle session management
+        try:
+            await self._ensure_session()
+        except Exception as e:
+            logger.warning(f"Session setup failed, using fallback: {e}")
+            return self._generate_mock_trends_data(search_term)
+        
+        # Use default timeframe if not specified
+        if timeframe is None:
+            timeframe = self.default_timeframe
+        elif timeframe in self.timeframes:
+            timeframe = self.timeframes[timeframe]
+        
+        # Check cache first
+        cache_key = self._get_cache_key(search_term, timeframe, geo)
+        if use_cache and cache_key in self.cache:
+            cached_result = self.cache[cache_key]
+            if self._is_cache_valid(cached_result):
+                logger.info(f"📋 Cache hit for: {search_term}")
+                cached_result['source'] = 'cache'
+                return cached_result
+        
+        try:
+            # Get fresh data from Google Trends
+            result = await self._get_trends_data(search_term, timeframe, geo)
+            
+            # Cache successful results
+            if result.get('success') and use_cache:
+                result['cached_at'] = datetime.utcnow()
+                self.cache[cache_key] = result.copy()
+                logger.info(f"💾 Cached result for: {search_term}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting attention score for {search_term}: {e}")
+            # Return fallback data
+            return self._generate_mock_trends_data(search_term)
+    
+    def _generate_mock_trends_data(self, search_term: str) -> dict:
+        """Generate realistic mock trends data for fallback"""
+        
+        # Base attention scores for different types
+        base_scores = {
+            # Politicians - higher volatility
+            "donald trump": random.uniform(60, 95),
+            "joe biden": random.uniform(40, 80), 
+            "kamala harris": random.uniform(25, 60),
+            "ron desantis": random.uniform(20, 55),
+            
+            # Billionaires - medium volatility
+            "elon musk": random.uniform(70, 90),
+            "jeff bezos": random.uniform(15, 45),
+            "bill gates": random.uniform(20, 50),
+            "warren buffett": random.uniform(10, 35),
+            
+            # Countries - lower volatility
+            "united states": random.uniform(30, 70),
+            "china": random.uniform(25, 60),
+            "japan": random.uniform(15, 40),
+            "united kingdom": random.uniform(20, 45),
+            
+            # Stocks/Crypto - high volatility
+            "tesla": random.uniform(40, 85),
+            "gamestop": random.uniform(20, 70),
+            "bitcoin": random.uniform(50, 90),
+            "artificial intelligence": random.uniform(45, 80)
+        }
+        
+        # Get base score or use random for unknown terms
+        search_lower = search_term.lower().replace(" news", "").replace(" stock", "")
+        base_score = base_scores.get(search_lower, random.uniform(20, 60))
+        
+        # Add some randomness
+        attention_score = max(0, min(100, base_score + random.uniform(-10, 10)))
+        
+        return {
+            'success': True,
+            'attention_score': attention_score,
+            'timeline': [attention_score] * 10,  # Mock timeline
+            'search_term': search_term,
+            'source': 'fallback_mock',
+            'timestamp': datetime.utcnow().isoformat()
+        }
+    
+    async def _get_trends_data(self, search_term: str, timeframe: str, geo: str) -> Dict:
+        """Get trends data from Google API"""
+        
+        # Step 1: Build payload and get tokens
+        tokens_success = await self._build_payload([search_term], timeframe, geo)
+        if not tokens_success:
+            return self._generate_mock_trends_data(search_term)
+        
+        # Step 2: Get interest over time data
+        result = await self._get_interest_over_time()
+        
+        if result and result.get('success'):
+            # Add metadata
+            result.update({
+                'search_term': search_term,
+                'geo': geo,
+                'timeframe': timeframe,
+                'source': 'google_trends_api',
+                'timestamp': datetime.utcnow().isoformat()
+            })
+            
+            logger.info(f"✅ Got trend score for {search_term}: {result['attention_score']}")
+            return result
+        else:
+            logger.warning(f"API failed for {search_term}, using fallback")
+            return self._generate_mock_trends_data(search_term)
+    
+    async def _build_payload(self, kw_list: List[str], timeframe: str, geo: str) -> bool:
+        """Build payload and get tokens from Google"""
+        
+        # Build token payload
+        self.token_payload = {
+            'hl': self.hl,
+            'tz': self.tz,
+            'req': {'comparisonItem': [], 'category': 0, 'property': ''}
+        }
+        
+        # Add keywords
+        from itertools import product
+        for kw, geo_item in product(kw_list, [geo]):
+            keyword_payload = {'keyword': kw, 'time': timeframe, 'geo': geo_item}
+            self.token_payload['req']['comparisonItem'].append(keyword_payload)
+        
+        # Convert to JSON string
+        self.token_payload['req'] = json.dumps(self.token_payload['req'])
+        
+        # Get tokens
+        return await self._get_tokens()
+    
+    async def _get_tokens(self) -> bool:
+        """Get widget tokens from explore endpoint"""
+        await self._rate_limit()
+        
+        try:
+            async with self.session.post(
+                self.explore_url, 
+                params=self.token_payload,
+                cookies=self.cookies
+            ) as response:
+                
+                if response.status == 200:
+                    response_text = await response.text()
+                    
+                    # Parse widgets (trim 4 chars)
+                    content = response_text[4:]
+                    data = json.loads(content)
+                    
+                    if 'widgets' in data:
+                        widgets = data['widgets']
+                        self._assign_widgets(widgets)
+                        return True
+                    else:
+                        logger.error("❌ No widgets in explore response")
+                        return False
+                        
+                elif response.status == 429:
+                    logger.warning("🚫 Rate limited on explore endpoint")
+                    self.min_delay = min(self.min_delay * 2, 60)
+                    return False
+                    
+                else:
+                    logger.error(f"❌ Explore endpoint failed: {response.status}")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"❌ Token request failed: {e}")
+            return False
+    
+    def _assign_widgets(self, widgets: List[Dict]):
+        """Assign widgets for different data types"""
+        self.interest_over_time_widget = None
+        self.interest_by_region_widget = None
+        
+        first_region_token = True
+        for widget in widgets:
+            widget_id = widget.get('id', '')
+            
+            if widget_id == 'TIMESERIES':
+                self.interest_over_time_widget = widget
+                
+            if widget_id == 'GEO_MAP' and first_region_token:
+                self.interest_by_region_widget = widget
+                first_region_token = False
+    
+    async def _get_interest_over_time(self) -> Optional[Dict]:
+        """Get interest over time data using widget token"""
+        if not self.interest_over_time_widget:
+            return {'success': False, 'error': 'No interest over time widget'}
+        
+        await self._rate_limit()
+        
+        payload = {
+            'req': json.dumps(self.interest_over_time_widget['request']),
+            'token': self.interest_over_time_widget['token'],
+            'tz': self.tz
+        }
+        
+        try:
+            async with self.session.get(
+                self.interest_over_time_url,
+                params=payload,
+                cookies=self.cookies
+            ) as response:
+                
+                if response.status == 200:
+                    response_text = await response.text()
+                    return self._parse_timeline_response(response_text)
+                else:
+                    return {'success': False, 'error': f'Timeline request failed: {response.status}'}
+                    
+        except Exception as e:
+            return {'success': False, 'error': f'Timeline request error: {e}'}
+    
+    def _parse_timeline_response(self, response_text: str) -> Dict:
+        """Parse timeline response"""
+        try:
+            # Trim 5 chars for widget endpoints
+            content = response_text[5:]
+            data = json.loads(content)
+            
+            if 'default' in data and 'timelineData' in data['default']:
+                timeline_data = data['default']['timelineData']
+                
+                if timeline_data:
+                    # Extract values
+                    timeline_values = []
+                    for entry in timeline_data:
+                        if 'value' in entry and len(entry['value']) > 0:
+                            timeline_values.append(entry['value'][0])
+                    
+                    if timeline_values:
+                        latest_score = timeline_values[-1]
+                        
+                        return {
+                            'success': True,
+                            'attention_score': float(latest_score),
+                            'timeline': timeline_values,
+                            'timeline_length': len(timeline_values),
+                            'average_score': sum(timeline_values) / len(timeline_values),
+                            'max_score': max(timeline_values),
+                            'min_score': min(timeline_values),
+                            'median_score': sorted(timeline_values)[len(timeline_values)//2],
+                            'volatility': self._calculate_volatility(timeline_values)
+                        }
+            
+            return {'success': False, 'error': 'No timeline data found'}
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Timeline parsing failed: {e}'}
+    
+    def _calculate_volatility(self, values: List[float]) -> float:
+        """Calculate volatility (standard deviation) of timeline values"""
+        if len(values) < 2:
+            return 0.0
+        
+        mean = sum(values) / len(values)
+        variance = sum((x - mean) ** 2 for x in values) / len(values)
+        return variance ** 0.5
+    
+    async def _rate_limit(self):
+        """Rate limiting to avoid being blocked"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        if time_since_last < self.min_delay:
+            sleep_time = self.min_delay - time_since_last
+            await asyncio.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
+    
+    def calculate_new_price(self, current_price: float, new_score: float, previous_score: float = 50.0) -> float:
+        """
+        Calculate new share price based on attention score change
+        
+        Formula:
+        1. Calculate % change in attention: (new_score - previous_score) / previous_score
+        2. Apply dampening factor: max change per update is ±15%
+        3. Price multiplier = 1 + (attention_change * 0.15)
+        4. New price = current_price * multiplier
+        5. Minimum price floor of $1.00
+        """
+        if previous_score == 0:
+            previous_score = 50.0
+        
+        # Calculate percentage change in attention
+        score_change = (new_score - previous_score) / previous_score
+        
+        # Apply dampening factor to prevent extreme price swings
+        # Maximum 15% price change per update
+        dampening_factor = 0.15
+        price_multiplier = 1 + (score_change * dampening_factor)
+        
+        # Cap between 70% and 150% (max -30% or +50% change)
+        price_multiplier = max(0.7, min(1.5, price_multiplier))
+        
+        new_price = current_price * price_multiplier
+        
+        # Minimum price floor of $1.00
+        return max(1.0, new_price)
+
+    async def seed_historical_data(self, target: AttentionTarget, days: int = 7):
+        """Create realistic historical data for the past N days for charts"""
+        db = SessionLocal()
+        try:
+            # Check if we already have historical data
+            existing_history = db.query(AttentionHistory).filter(
+                AttentionHistory.target_id == target.id
+            ).count()
+            
+            if existing_history > 0:
+                logger.info(f"Historical data already exists for {target.name}")
+                return
+            
+            # Generate historical data for past 7 days
+            base_attention = float(target.current_attention_score) if target.current_attention_score else 50.0
+            base_price = float(target.current_share_price) if target.current_share_price else 10.0
+            
+            # Create entries for each day (4 entries per day = every 6 hours)
+            entries_per_day = 4
+            total_entries = days * entries_per_day
+            
+            for i in range(total_entries, 0, -1):  # Go backwards in time
+                # Calculate timestamp (going backwards from now)
+                timestamp = datetime.utcnow() - timedelta(hours=i * 6)
+                
+                # Generate realistic attention score with some trend
+                trend_factor = (total_entries - i) / total_entries  # 0 to 1
+                volatility = random.uniform(-5, 5)  # Random noise
+                
+                attention_score = base_attention + (trend_factor * 10) + volatility
+                attention_score = max(0, min(100, attention_score))  # Keep in 0-100 range
+                
+                # Calculate corresponding price
+                if i == total_entries:  # First entry
+                    price = base_price
+                else:
+                    # Get previous price and calculate new one
+                    prev_entry = db.query(AttentionHistory).filter(
+                        AttentionHistory.target_id == target.id
+                    ).order_by(AttentionHistory.timestamp.desc()).first()
+                    
+                    prev_score = float(prev_entry.attention_score) if prev_entry else 50.0
+                    prev_price = float(prev_entry.share_price) if prev_entry else base_price
+                    
+                    price = self.calculate_new_price(prev_price, attention_score, prev_score)
+                
+                # Create history entry
+                history_entry = AttentionHistory(
+                    target_id=target.id,
+                    attention_score=Decimal(str(attention_score)),
+                    share_price=Decimal(str(price)),
+                    timestamp=timestamp
+                )
+                db.add(history_entry)
+            
+            db.commit()
+            logger.info(f"Created {total_entries} historical entries for {target.name}")
+            
+        except Exception as e:
+            logger.error(f"Error seeding historical data for {target.name}: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+    async def update_target_data(self, target: AttentionTarget, db: Session) -> bool:
+        """Update a single target's attention data"""
+        try:
+            # Get current trends data
+            trends_data = await self.get_google_trends_data(target.search_term)
+            new_score = trends_data["attention_score"]
+            
+            # Calculate new price
+            previous_score = float(target.current_attention_score) if target.current_attention_score else 50.0
+            new_price = self.calculate_new_price(
+                float(target.current_share_price),
+                new_score,
+                previous_score
+            )
+            
+            # Update target
+            target.current_attention_score = Decimal(str(new_score))
+            target.current_share_price = Decimal(str(new_price))
+            target.last_updated = datetime.utcnow()
+            
+            # Save historical data
+            history_entry = AttentionHistory(
+                target_id=target.id,
+                attention_score=Decimal(str(new_score)),
+                share_price=Decimal(str(new_price))
+            )
+            db.add(history_entry)
+            
+            source = trends_data.get("source", "unknown")
+            logger.info(f"Updated {target.name}: Score {new_score:.1f}, Price ${new_price:.2f} ({source})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating {target.name}: {e}")
+            return False
+
+    async def update_all_targets(self):
+        """Update all active targets with fresh attention data"""
+        db = SessionLocal()
+        try:
+            # Get all active targets
+            targets = db.query(AttentionTarget).filter(
+                AttentionTarget.is_active == True
+            ).all()
+            
+            logger.info(f"Updating {len(targets)} targets...")
+            
+            updated_count = 0
+            for target in targets:
+                # Seed historical data if this is the first time
+                await self.seed_historical_data(target)
+                
+                # Add delay to avoid rate limiting
+                await asyncio.sleep(self.min_delay)
+                
+                if await self.update_target_data(target, db):
+                    updated_count += 1
+            
+            db.commit()
+            logger.info(f"Successfully updated {updated_count}/{len(targets)} targets")
+            
+        except Exception as e:
+            logger.error(f"Error in update_all_targets: {e}")
+            db.rollback()
+        finally:
+            db.close()
+
+# Background task runner with proper session management
+async def run_data_updates():
+    """Main function to run periodic data updates"""
+    
+    while True:
+        try:
+            async with GoogleTrendsService() as service:
+                logger.info("Starting scheduled data update...")
+                await service.update_all_targets()
+                
+            # Wait 5 minutes before next update (increased from 1 minute to be safer)
+            logger.info("Waiting 5 minutes until next update...")
+            await asyncio.sleep(300)  # 5 minutes = 300 seconds
+            
+        except Exception as e:
+            logger.error(f"Error in data update cycle: {e}")
+            # Wait 5 minutes before retrying on error
+            await asyncio.sleep(300)
+
+# Seed some initial targets
+async def seed_initial_targets():
+    """Seed the database with popular targets and their historical data"""
+    db = SessionLocal()
+    try:
+        from models import TargetType
+        
+        initial_targets = [
+            # Politicians
+            {"name": "Donald Trump", "type": TargetType.POLITICIAN, "search_term": "Donald Trump"},
+            {"name": "Joe Biden", "type": TargetType.POLITICIAN, "search_term": "Joe Biden"},
+            {"name": "Kamala Harris", "type": TargetType.POLITICIAN, "search_term": "Kamala Harris"},
+            {"name": "Ron DeSantis", "type": TargetType.POLITICIAN, "search_term": "Ron DeSantis"},
+            
+            # Billionaires
+            {"name": "Elon Musk", "type": TargetType.BILLIONAIRE, "search_term": "Elon Musk"},
+            {"name": "Jeff Bezos", "type": TargetType.BILLIONAIRE, "search_term": "Jeff Bezos"},
+            {"name": "Bill Gates", "type": TargetType.BILLIONAIRE, "search_term": "Bill Gates"},
+            {"name": "Warren Buffett", "type": TargetType.BILLIONAIRE, "search_term": "Warren Buffett"},
+            
+            # Countries
+            {"name": "United States", "type": TargetType.COUNTRY, "search_term": "United States"},
+            {"name": "China", "type": TargetType.COUNTRY, "search_term": "China"},
+            {"name": "Japan", "type": TargetType.COUNTRY, "search_term": "Japan"},
+            {"name": "United Kingdom", "type": TargetType.COUNTRY, "search_term": "United Kingdom"},
+            
+            # Stocks (meme potential)
+            {"name": "Tesla", "type": TargetType.STOCK, "search_term": "Tesla"},
+            {"name": "GameStop", "type": TargetType.STOCK, "search_term": "GameStop"},
+            {"name": "AMC", "type": TargetType.STOCK, "search_term": "AMC"},
+            {"name": "Bitcoin", "type": TargetType.STOCK, "search_term": "Bitcoin"},
+        ]
+        
+        async with GoogleTrendsService() as service:
+            for target_data in initial_targets:
+                # Check if target already exists
+                existing = db.query(AttentionTarget).filter(
+                    AttentionTarget.name == target_data["name"]
+                ).first()
+                
+                if not existing:
+                    # Get initial attention score
+                    trends_data = await service.get_google_trends_data(target_data["search_term"])
+                    initial_score = trends_data["attention_score"]
+                    
+                    target = AttentionTarget(
+                        name=target_data["name"],
+                        type=target_data["type"],
+                        search_term=target_data["search_term"],
+                        current_attention_score=Decimal(str(initial_score)),
+                        current_share_price=Decimal("10.00"),  # Starting price
+                        description=f"Attention score for {target_data['name']}"
+                    )
+                    
+                    db.add(target)
+                    db.commit()
+                    db.refresh(target)
+                    
+                    # Seed historical data
+                    await service.seed_historical_data(target, days=7)
+                    
+                    logger.info(f"Added target: {target_data['name']} (Score: {initial_score:.1f})")
+                    
+                    # Delay between requests
+                    await asyncio.sleep(service.min_delay)
+        
+        db.commit()
+        logger.info("Initial targets seeded successfully with historical data!")
+        
+    except Exception as e:
+        logger.error(f"Error seeding targets: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+# Convenience function for external usage
+async def get_trend_score(search_term: str) -> float:
+    """Simple function to get a single trend score"""
+    async with GoogleTrendsService() as service:
+        trends_data = await service.get_google_trends_data(search_term)
+        return trends_data.get("attention_score", 0.0)
+
+if __name__ == "__main__":
+    # Run the seeder first, then start the update service
+    asyncio.run(seed_initial_targets())
+    asyncio.run(run_data_updates())

@@ -65,9 +65,8 @@ class SearchRequest(BaseModel):
 class TournamentEntryRequest(BaseModel):
     tournament_id: int
 
-# SerpAPI integration
-from serpapi_service import SerpAPIService
-serpapi_service = SerpAPIService()
+# Google Trends integration
+from google_trends_service import GoogleTrendsService
 
 # Auth endpoints
 @app.post("/auth/register")
@@ -213,8 +212,9 @@ async def search_trends(search_data: SearchRequest, db: Session = Depends(get_db
     """Search for any term and get its attention data"""
     
     # Get current Google Trends data
-    trends_data = await serpapi_service.get_google_trends_data(search_data.query)
-    attention_score = trends_data.get("attention_score", 0.0)
+    async with GoogleTrendsService() as service:
+        trends_data = await service.get_google_trends_data(search_data.query)
+        attention_score = trends_data.get("attention_score", 0.0)
     
     # Check if target already exists
     existing_target = db.query(AttentionTarget).filter(
@@ -223,11 +223,12 @@ async def search_trends(search_data: SearchRequest, db: Session = Depends(get_db
     
     if existing_target:
         # Update existing target
-        new_price = serpapi_service.calculate_new_price(
-            float(existing_target.current_share_price),
-            attention_score,
-            float(existing_target.current_attention_score)
-        )
+        async with GoogleTrendsService() as service:
+            new_price = service.calculate_new_price(
+                float(existing_target.current_share_price),
+                attention_score,
+                float(existing_target.current_attention_score)
+            )
         
         existing_target.current_attention_score = Decimal(str(attention_score))
         existing_target.current_share_price = Decimal(str(new_price))
@@ -557,7 +558,7 @@ def health_check():
 # Background tasks
 async def start_background_tasks():
     """Start background data update tasks"""
-    from serpapi_service import run_data_updates
+    from google_trends_service import run_data_updates
     from tournament_management import tournament_management_task
     
     # Start both tasks concurrently

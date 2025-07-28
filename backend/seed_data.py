@@ -3,6 +3,7 @@ Run this script to populate the database with initial data.
 Usage: python seed_data.py
 """
 
+import asyncio
 from sqlalchemy.orm import sessionmaker
 from database import engine
 from models import AttentionTarget, User, TargetType
@@ -33,7 +34,7 @@ def create_admin_user():
     
     db.close()
 
-def seed_sample_targets():
+async def seed_sample_targets():
     """Seed initial attention targets for each category"""
     db = SessionLocal()
     
@@ -94,25 +95,25 @@ def seed_sample_targets():
         {
             "name": "United States",
             "type": TargetType.COUNTRY,
-            "search_term": "United States news",
+            "search_term": "United States",
             "description": "USA - country attention tracking"
         },
         {
             "name": "China",
             "type": TargetType.COUNTRY,
-            "search_term": "China news",
+            "search_term": "China",
             "description": "People's Republic of China - country attention tracking"
         },
         {
             "name": "Japan",
             "type": TargetType.COUNTRY,
-            "search_term": "Japan news", 
+            "search_term": "Japan", 
             "description": "Japan - country attention tracking"
         },
         {
             "name": "United Kingdom",
             "type": TargetType.COUNTRY,
-            "search_term": "United Kingdom news",
+            "search_term": "United Kingdom",
             "description": "UK - country attention tracking"
         },
         
@@ -120,19 +121,19 @@ def seed_sample_targets():
         {
             "name": "Tesla",
             "type": TargetType.STOCK,
-            "search_term": "Tesla stock",
+            "search_term": "Tesla",
             "description": "Tesla Inc - meme stock attention tracking"
         },
         {
             "name": "GameStop", 
             "type": TargetType.STOCK,
-            "search_term": "GameStop stock",
+            "search_term": "GameStop",
             "description": "GameStop Corp - meme stock attention tracking"
         },
         {
             "name": "AMC",
             "type": TargetType.STOCK,
-            "search_term": "AMC stock",
+            "search_term": "AMC",
             "description": "AMC Entertainment - meme stock attention tracking"
         },
         {
@@ -143,26 +144,68 @@ def seed_sample_targets():
         }
     ]
     
-    for target_data in sample_targets:
-        existing = db.query(AttentionTarget).filter(
-            AttentionTarget.name == target_data["name"]
-        ).first()
+    try:
+        from google_trends_service import GoogleTrendsService
         
-        if not existing:
-            # Generate realistic starting data
-            base_attention_score = random.uniform(20.0, 80.0)
-            base_price = random.uniform(8.0, 15.0)
+        async with GoogleTrendsService() as service:
+            for target_data in sample_targets:
+                existing = db.query(AttentionTarget).filter(
+                    AttentionTarget.name == target_data["name"]
+                ).first()
+                
+                if not existing:
+                    # Get initial attention score from Google Trends
+                    try:
+                        trends_data = await service.get_google_trends_data(target_data["search_term"])
+                        base_attention_score = trends_data.get("attention_score", random.uniform(20.0, 80.0))
+                    except Exception as e:
+                        print(f"Failed to get trends data for {target_data['name']}: {e}")
+                        base_attention_score = random.uniform(20.0, 80.0)
+                    
+                    base_price = random.uniform(8.0, 15.0)
+                    
+                    target = AttentionTarget(
+                        name=target_data["name"],
+                        type=target_data["type"],
+                        search_term=target_data["search_term"],
+                        description=target_data["description"],
+                        current_attention_score=Decimal(str(base_attention_score)),
+                        current_share_price=Decimal(str(base_price))
+                    )
+                    db.add(target)
+                    db.commit()
+                    db.refresh(target)
+                    
+                    # Seed historical data
+                    await service.seed_historical_data(target, days=7)
+                    
+                    print(f"Added target: {target_data['name']} (Score: {base_attention_score:.1f}, Price: ${base_price:.2f})")
+                    
+                    # Add delay between requests to be nice to Google
+                    await asyncio.sleep(service.min_delay)
+    
+    except ImportError:
+        print("Google Trends service not available, using random data...")
+        # Fallback to random data if service not available
+        for target_data in sample_targets:
+            existing = db.query(AttentionTarget).filter(
+                AttentionTarget.name == target_data["name"]
+            ).first()
             
-            target = AttentionTarget(
-                name=target_data["name"],
-                type=target_data["type"],
-                search_term=target_data["search_term"],
-                description=target_data["description"],
-                current_attention_score=Decimal(str(base_attention_score)),
-                current_share_price=Decimal(str(base_price))
-            )
-            db.add(target)
-            print(f"Added target: {target_data['name']} (Score: {base_attention_score:.1f}, Price: ${base_price:.2f})")
+            if not existing:
+                base_attention_score = random.uniform(20.0, 80.0)
+                base_price = random.uniform(8.0, 15.0)
+                
+                target = AttentionTarget(
+                    name=target_data["name"],
+                    type=target_data["type"],
+                    search_term=target_data["search_term"],
+                    description=target_data["description"],
+                    current_attention_score=Decimal(str(base_attention_score)),
+                    current_share_price=Decimal(str(base_price))
+                )
+                db.add(target)
+                print(f"Added target: {target_data['name']} (Score: {base_attention_score:.1f}, Price: ${base_price:.2f})")
     
     db.commit()
     print("Sample attention targets seeded successfully!")
@@ -173,13 +216,17 @@ def seed_categories():
     """Legacy function - categories are now handled by TargetType enum"""
     print("Categories are now handled by TargetType enum - no separate table needed")
 
-def seed_sample_trends():
+async def seed_sample_trends():
     """Legacy function - redirects to seed_sample_targets"""
-    seed_sample_targets()
+    await seed_sample_targets()
 
-if __name__ == "__main__":
+async def main():
+    """Main seeding function"""
     print("Seeding TrendBet database...")
     create_admin_user()
     seed_categories()
-    seed_sample_targets()
+    await seed_sample_targets()
     print("Database seeding completed!")
+
+if __name__ == "__main__":
+    asyncio.run(main())
