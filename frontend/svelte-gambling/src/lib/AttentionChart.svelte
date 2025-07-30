@@ -194,130 +194,98 @@
   }
 
   function renderChart(data) {
-    destroyChart();
+      destroyChart();
 
-    if (!chartCanvas || !data.data.length) return;
+      if (!chartCanvas || !data.data.length) return;
 
-    const ctx = chartCanvas.getContext('2d');
-    
-    const labels = data.data.map(point => {
-      const date = new Date(point.timestamp);
-      if (selectedTimeframe <= 30) {
-        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit' });
-      } else if (selectedTimeframe <= 365) {
-        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      } else {
-        return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
-      }
-    });
+      const ctx = chartCanvas.getContext('2d');
+      
+      const labels = data.data.map(point => {
+        const date = new Date(point.timestamp);
+        if (selectedTimeframe <= 30) {
+          return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit' });
+        } else if (selectedTimeframe <= 365) {
+          return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        } else {
+          return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
+        }
+      });
 
-    const attentionData = data.data.map(point => parseFloat(point.attention_score));
+      const attentionData = data.data.map(point => parseFloat(point.attention_score));
 
-    // Create gradient
-    const gradient = ctx.createLinearGradient(0, 0, 0, 400);
-    gradient.addColorStop(0, 'rgba(59, 130, 246, 0.3)');
-    gradient.addColorStop(1, 'rgba(59, 130, 246, 0.05)');
+      // Create gradient
+      const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+      gradient.addColorStop(0, 'rgba(59, 130, 246, 0.3)');
+      gradient.addColorStop(1, 'rgba(59, 130, 246, 0.05)');
 
-    chart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: labels,
-        datasets: [
-          {
-            label: 'Google Trends Score',
-            data: attentionData,
-            borderColor: 'rgb(59, 130, 246)',
-            backgroundColor: gradient,
-            borderWidth: 2,
-            tension: 0.4,
-            pointRadius: selectedTimeframe <= 30 ? 3 : selectedTimeframe <= 365 ? 2 : 1,
-            pointHoverRadius: 6,
-            pointBackgroundColor: 'rgb(59, 130, 246)',
-            pointBorderColor: '#ffffff',
-            pointBorderWidth: 2,
-            fill: true
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: {
-          duration: autoUpdate ? 0 : 1000 // No animation for real-time updates
-        },
-        interaction: {
-          mode: 'index',
-          intersect: false,
-        },
-        plugins: {
-          title: {
-            display: !targetName,
-            text: `${data.target.name} - Real-time Google Trends`,
-            color: '#F8FAFC',
-            font: { size: 18, weight: 'bold' },
-            padding: 20
-          },
-          legend: {
-            display: false
-          },
-          tooltip: {
-            backgroundColor: 'rgba(0, 0, 0, 0.8)',
-            titleColor: '#F8FAFC',
-            bodyColor: '#F8FAFC',
-            borderColor: 'rgb(59, 130, 246)',
-            borderWidth: 1,
-            cornerRadius: 8,
-            displayColors: false,
-            callbacks: {
-              title: function(context) {
-                return context[0].label;
-              },
-              label: function(context) {
-                return `Google Trends Score: ${context.parsed.y.toFixed(1)}%`;
-              },
-              afterLabel: function(context) {
-                return 'Source: Google Trends API';
-              }
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Google Trends Score',
+              data: attentionData,
+              borderColor: 'rgb(59, 130, 246)',
+              backgroundColor: gradient,
+              borderWidth: 2,
+              tension: 0.4,
+              pointRadius: selectedTimeframe <= 30 ? 3 : selectedTimeframe <= 365 ? 2 : 1,
+              pointHoverRadius: 6,
+              pointBackgroundColor: 'rgb(59, 130, 246)',
+              pointBorderColor: '#ffffff',
+              pointBorderWidth: 2,
+              fill: true
             }
-          }
+          ]
         },
-        scales: {
-          x: {
-            ticks: { 
-              color: '#CBD5E1',
-              maxTicksLimit: selectedTimeframe <= 30 ? 8 : selectedTimeframe <= 365 ? 12 : 6
-            },
-            grid: { 
-              color: 'rgba(255,255,255,0.1)',
-              drawBorder: false
-            },
-            border: { display: false }
-          },
-          y: {
-            beginAtZero: true,
-            max: 100,
-            ticks: { 
-              color: '#CBD5E1',
-              callback: function(value) {
-                return value + '%';
-              },
-              stepSize: 20
-            },
-            grid: { 
-              color: 'rgba(255,255,255,0.1)',
-              drawBorder: false
-            },
-            border: { display: false },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
             title: {
               display: true,
-              text: 'Google Trends Score (%)',
+              text: `${data.target.name} - Attention Trends`,
               color: '#F8FAFC',
-              font: { size: 14, weight: '500' }
+              font: {
+                size: 16,
+                weight: 'bold'
+              }
+            },
+            legend: {
+              display: false // Single dataset, no need for legend
+            }
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: '#CBD5E1'
+              },
+              grid: {
+                color: 'rgba(255, 255, 255, 0.1)'
+              }
+            },
+            y: {
+              type: 'linear',
+              display: true,
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Google Trends Score (0-100)',
+                color: '#CBD5E1'
+              },
+              ticks: {
+                color: '#CBD5E1'
+              },
+              grid: {
+                color: 'rgba(255, 255, 255, 0.1)'
+              },
+              min: 0,
+              max: 100
             }
           }
         }
-      }
-    });
+      });
   }
 
   function destroyChart() {

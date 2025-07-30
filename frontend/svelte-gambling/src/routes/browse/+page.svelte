@@ -61,121 +61,103 @@
     }
   }
 
+  // In browse/+page.svelte, update the loadTargetChart function:
+
   async function loadTargetChart(targetId, days = 7) {
-    try {
-      const chartData = await apiFetch(`/targets/${targetId}/chart?days=${days}`);
-      renderChart(chartData);
-    } catch (error) {
-      console.error('Failed to load chart data:', error);
-    }
+      if (!targetId) {
+        console.error('No target ID provided for chart');
+        return;
+      }
+      
+      try {
+        const chartData = await apiFetch(`/targets/${targetId}/chart?days=${days}`);
+        renderChart(chartData);
+      } catch (error) {
+        console.error('Failed to load chart data:', error);
+      }
   }
 
+  // Also update the renderChart function to remove share price:
   function renderChart(data) {
-    destroyChart();
+      destroyChart();
 
-    if (!chartCanvas) return;
+      if (!chartCanvas || !data?.data?.length) return;
 
-    const ctx = chartCanvas.getContext('2d');
-    
-    // Prepare data for Chart.js
-    const labels = data.data.map(point => {
-      const date = new Date(point.timestamp);
-      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    });
+      const ctx = chartCanvas.getContext('2d');
+      
+      // Prepare data for Chart.js
+      const labels = data.data.map(point => {
+        const date = new Date(point.timestamp);
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      });
 
-    const attentionData = data.data.map(point => point.attention_score);
-    const priceData = data.data.map(point => point.share_price);
+      const attentionData = data.data.map(point => point.attention_score);
 
-    chart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: labels,
-        datasets: [
-          {
-            label: 'Attention Score',
-            data: attentionData,
-            borderColor: 'rgb(59, 130, 246)',
-            backgroundColor: 'rgba(59, 130, 246, 0.1)',
-            tension: 0.4,
-            yAxisID: 'y'
-          },
-          {
-            label: 'Share Price ($)',
-            data: priceData,
-            borderColor: 'rgb(16, 185, 129)',
-            backgroundColor: 'rgba(16, 185, 129, 0.1)',
-            tension: 0.4,
-            yAxisID: 'y1'
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: {
-          mode: 'index',
-          intersect: false,
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Attention Score',
+              data: attentionData,
+              borderColor: 'rgb(59, 130, 246)',
+              backgroundColor: 'rgba(59, 130, 246, 0.1)',
+              tension: 0.4
+            }
+          ]
         },
-        plugins: {
-          title: {
-            display: true,
-            text: `${data.target.name} - Attention & Price Trends`,
-            color: '#F8FAFC',
-            font: {
-              size: 16,
-              weight: 'bold'
-            }
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false,
           },
-          legend: {
-            labels: {
-              color: '#F8FAFC'
-            }
-          }
-        },
-        scales: {
-          x: {
-            ticks: {
-              color: '#CBD5E1'
-            },
-            grid: {
-              color: 'rgba(255, 255, 255, 0.1)'
-            }
-          },
-          y: {
-            type: 'linear',
-            display: true,
-            position: 'left',
+          plugins: {
             title: {
               display: true,
-              text: 'Attention Score',
-              color: '#CBD5E1'
+              text: `${data.target.name} - Attention Trends`,
+              color: '#F8FAFC',
+              font: {
+                size: 16,
+                weight: 'bold'
+              }
             },
-            ticks: {
-              color: '#CBD5E1'
-            },
-            grid: {
-              color: 'rgba(255, 255, 255, 0.1)'
+            legend: {
+              display: false
             }
           },
-          y1: {
-            type: 'linear',
-            display: true,
-            position: 'right',
-            title: {
+          scales: {
+            x: {
+              ticks: {
+                color: '#CBD5E1'
+              },
+              grid: {
+                color: 'rgba(255, 255, 255, 0.1)'
+              }
+            },
+            y: {
+              type: 'linear',
               display: true,
-              text: 'Share Price ($)',
-              color: '#CBD5E1'
-            },
-            ticks: {
-              color: '#CBD5E1'
-            },
-            grid: {
-              drawOnChartArea: false,
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Attention Score (0-100)',
+                color: '#CBD5E1'
+              },
+              ticks: {
+                color: '#CBD5E1'
+              },
+              grid: {
+                color: 'rgba(255, 255, 255, 0.1)'
+              },
+              min: 0,
+              max: 100
             }
           }
         }
-      }
-    });
+      });
   }
 
   function destroyChart() {

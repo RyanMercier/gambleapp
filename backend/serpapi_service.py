@@ -167,6 +167,7 @@ class SerpAPIService:
         # Minimum price floor of $1.00
         return max(1.0, new_price)
 
+    # Update seed_historical_data method:
     async def seed_historical_data(self, target: AttentionTarget, days: int = 7):
         """Create realistic historical data for the past N days for charts"""
         db = SessionLocal()
@@ -182,7 +183,6 @@ class SerpAPIService:
             
             # Generate historical data for past 7 days
             base_attention = float(target.current_attention_score) if target.current_attention_score else 50.0
-            base_price = float(target.current_share_price) if target.current_share_price else 10.0
             
             # Create entries for each day (4 entries per day = every 6 hours)
             entries_per_day = 4
@@ -199,25 +199,10 @@ class SerpAPIService:
                 attention_score = base_attention + (trend_factor * 10) + volatility
                 attention_score = max(0, min(100, attention_score))  # Keep in 0-100 range
                 
-                # Calculate corresponding price
-                if i == total_entries:  # First entry
-                    price = base_price
-                else:
-                    # Get previous price and calculate new one
-                    prev_entry = db.query(AttentionHistory).filter(
-                        AttentionHistory.target_id == target.id
-                    ).order_by(AttentionHistory.timestamp.desc()).first()
-                    
-                    prev_score = float(prev_entry.attention_score) if prev_entry else 50.0
-                    prev_price = float(prev_entry.share_price) if prev_entry else base_price
-                    
-                    price = self.calculate_new_price(prev_price, attention_score, prev_score)
-                
-                # Create history entry
+                # Create history entry (NO SHARE PRICE)
                 history_entry = AttentionHistory(
                     target_id=target.id,
                     attention_score=Decimal(str(attention_score)),
-                    share_price=Decimal(str(price)),
                     timestamp=timestamp
                 )
                 db.add(history_entry)
@@ -231,6 +216,7 @@ class SerpAPIService:
         finally:
             db.close()
 
+    # Update update_target_data method:
     async def update_target_data(self, target: AttentionTarget, db: Session) -> bool:
         """Update a single target's attention data"""
         try:
@@ -238,29 +224,19 @@ class SerpAPIService:
             trends_data = await self.get_google_trends_data(target.search_term)
             new_score = trends_data["attention_score"]
             
-            # Calculate new price
-            previous_score = float(target.current_attention_score) if target.current_attention_score else 50.0
-            new_price = self.calculate_new_price(
-                float(target.current_share_price),
-                new_score,
-                previous_score
-            )
-            
-            # Update target
+            # Update target (NO PRICE CALCULATION)
             target.current_attention_score = Decimal(str(new_score))
-            target.current_share_price = Decimal(str(new_price))
             target.last_updated = datetime.utcnow()
             
-            # Save historical data
+            # Save historical data (NO SHARE PRICE)
             history_entry = AttentionHistory(
                 target_id=target.id,
-                attention_score=Decimal(str(new_score)),
-                share_price=Decimal(str(new_price))
+                attention_score=Decimal(str(new_score))
             )
             db.add(history_entry)
             
             source = trends_data.get("source", "unknown")
-            logger.info(f"Updated {target.name}: Score {new_score:.1f}, Price ${new_price:.2f} ({source})")
+            logger.info(f"Updated {target.name}: Score {new_score:.1f} ({source})")
             return True
             
         except Exception as e:

@@ -13,7 +13,7 @@
   let portfolio = null;
 
   $: targetId = $page.params.id;
-  $: totalCost = target ? shares * target.current_price : 0;
+  $: totalCost = target ? shares * target.attention_score : 0;
   $: canAfford = $user && totalCost <= $user.balance;
   $: hasShares = portfolio && portfolio.shares_owned > 0;
   $: maxSellShares = portfolio ? portfolio.shares_owned : 0;
@@ -137,7 +137,7 @@
     if (!portfolio || tradeType !== 'sell' || shares <= 0) return null;
     
     const avgPrice = portfolio.average_price;
-    const currentPrice = target.current_price;
+    const currentPrice = target.attention_score;
     const totalProceeds = shares * currentPrice;
     const totalCost = shares * avgPrice;
     const pnl = totalProceeds - totalCost;
@@ -188,13 +188,9 @@
           <div class="space-y-4">
             <div class="flex justify-between items-center p-3 bg-white/5 rounded-lg">
               <span class="text-gray-400">Current Price</span>
-              <span class="text-xl font-bold text-emerald-400">{formatCurrency(target.current_price)}</span>
+              <span class="text-xl font-bold text-emerald-400">{formatCurrency(target.attention_score)}</span>
             </div>
-            
-            <div class="flex justify-between items-center p-3 bg-white/5 rounded-lg">
-              <span class="text-gray-400">Attention Score</span>
-              <span class="text-xl font-bold text-blue-400">{formatNumber(target.attention_score)}</span>
-            </div>
+  
             
             <div class="flex justify-between items-center p-3 bg-white/5 rounded-lg">
               <span class="text-gray-400">Last Updated</span>
@@ -292,7 +288,7 @@
                 
                 <div class="flex justify-between text-sm">
                   <span>Price per Share:</span>
-                  <span>{formatCurrency(target.current_price)}</span>
+                  <span>{formatCurrency(target.attention_score)}</span>
                 </div>
                 
                 <hr class="border-white/10">

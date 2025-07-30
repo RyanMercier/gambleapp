@@ -275,30 +275,39 @@ def get_target_detail(target_id: int, db: Session = Depends(get_db)):
     }
 
 @app.get("/targets/{target_id}/chart")
-def get_target_chart(target_id: int, db: Session = Depends(get_db)):
-    """Get historical attention data for charting"""
-    target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
-    if not target:
-        raise HTTPException(status_code=404, detail="Target not found")
-    
-    history = db.query(AttentionHistory).filter(
-        AttentionHistory.target_id == target_id
-    ).order_by(AttentionHistory.timestamp.desc()).limit(100).all()
-    
-    return {
-        "target": {
-            "id": target.id,
-            "name": target.name,
-            "current_attention_score": float(target.current_attention_score)
-        },
-        "history": [
-            {
-                "attention_score": float(h.attention_score),
-                "timestamp": h.timestamp
-            }
-            for h in reversed(history)
-        ]
-    }
+def get_target_chart(
+        target_id: int, 
+        days: int = 7,
+        db: Session = Depends(get_db)
+    ):
+        """Get historical attention data for charting"""
+        target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Target not found")
+        
+        # Calculate the date range
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=days)
+        
+        history = db.query(AttentionHistory).filter(
+            AttentionHistory.target_id == target_id,
+            AttentionHistory.timestamp >= start_date
+        ).order_by(AttentionHistory.timestamp.asc()).all()
+        
+        return {
+            "target": {
+                "id": target.id,
+                "name": target.name,
+                "current_attention_score": float(target.current_attention_score)
+            },
+            "data": [
+                {
+                    "attention_score": float(h.attention_score),
+                    "timestamp": h.timestamp.isoformat()
+                }
+                for h in history
+            ]
+        }
 
 # Trading endpoints
 @app.post("/trade")

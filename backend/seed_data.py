@@ -1,6 +1,7 @@
 # backend/seed_data.py
 """
 Improved seed data script with fallback support for when Google Trends is rate limited
+ATTENTION ONLY - NO SHARE PRICES
 """
 
 import asyncio
@@ -50,61 +51,49 @@ async def create_target_with_data(target_data: dict, service: GoogleTrendsServic
         search_term = target_data["search_term"]
         target_type = target_data["type"]
         
-        logger.info(f"📊 Creating target: {name}")
-        
         # Check if target already exists
         existing = db.query(AttentionTarget).filter(
-            AttentionTarget.search_term == search_term
+            AttentionTarget.name == name
         ).first()
         
         if existing:
             logger.info(f"Target {name} already exists, skipping")
-            return True
+            return False
         
-        # Try to get Google Trends data (will fallback automatically if needed)
-        try:
-            attention_data = await service.get_attention_score(search_term)
-            
-            if attention_data and attention_data.get('success'):
-                current_score = attention_data['attention_score']  # Fixed: was 'current_score'
-                data_source = attention_data.get('source', 'unknown')
-            else:
-                # This shouldn't happen with the new service, but just in case
-                current_score = random.uniform(30, 80)
-                data_source = 'fallback'
-                
-        except Exception as e:
-            logger.warning(f"Error getting data for {name}: {e}, using fallback")
-            current_score = random.uniform(30, 80)
-            data_source = 'fallback'
+        # Get initial attention score from Google Trends
+        trends_data = await service.get_google_trends_data(search_term)
+        initial_score = trends_data.get("attention_score", 50.0)
         
-        # Create the target
+        # Map string type to enum
+        type_mapping = {
+            "politician": TargetType.POLITICIAN,
+            "billionaire": TargetType.BILLIONAIRE,
+            "country": TargetType.COUNTRY,
+            "stock": TargetType.STOCK
+        }
+        
+        # Create the target (NO SHARE PRICE)
         target = AttentionTarget(
             name=name,
-            type=TargetType(target_type),
+            type=type_mapping[target_type],
             search_term=search_term,
-            description=f"Attention trading target for {name}",
-            current_attention_score=Decimal(str(current_score))
+            current_attention_score=Decimal(str(initial_score)),
+            description=f"Real-time Google Trends attention score for {name}"
         )
         
         db.add(target)
         db.commit()
         db.refresh(target)
         
-        # Add initial history entry
-        history = AttentionHistory(
-            target_id=target.id,
-            attention_score=target.current_attention_score,
-            data_source=data_source
-        )
-        db.add(history)
-        db.commit()
+        logger.info(f"✅ Created target: {name} (Initial Score: {initial_score:.1f})")
         
-        logger.info(f"✅ Created {name} with score {current_score:.1f} (source: {data_source})")
+        # Seed historical data
+        await seed_historical_data_for_target(target, days=90)
+        
         return True
         
     except Exception as e:
-        logger.error(f"❌ Failed to create target {target_data['name']}: {e}")
+        logger.error(f"Failed to create target {target_data['name']}: {e}")
         db.rollback()
         return False
 
@@ -141,7 +130,7 @@ async def seed_sample_targets():
         db.close()
 
 async def seed_historical_data_for_target(target: AttentionTarget, days: int = 90):
-    """Create historical data for a target (last 90 days)"""
+    """Create historical data for a target (last 90 days) - ATTENTION ONLY"""
     db = SessionLocal()
     try:
         # Check if we already have historical data
@@ -159,62 +148,64 @@ async def seed_historical_data_for_target(target: AttentionTarget, days: int = 9
         base_score = float(target.current_attention_score)
         
         for day in range(days, 0, -1):  # Go backwards from today
-            # Create realistic variations
-            daily_variation = random.uniform(-5, 5)
-            seasonal_factor = 1 + 0.1 * random.sin(day / 7)  # Weekly pattern
-            
-            score = max(0, min(100, base_score + daily_variation * seasonal_factor))
-            timestamp = datetime.utcnow() - timedelta(days=day)
-            
-            # Don't create entries for every day, just a few per week
-            if day % 3 == 0:  # Every 3rd day
+            # Create 4 data points per day (every 6 hours)
+            for hour in [0, 6, 12, 18]:
+                timestamp = datetime.utcnow() - timedelta(days=day, hours=hour)
+                
+                # Add some realistic variation
+                daily_variation = random.uniform(-10, 10)
+                hourly_variation = random.uniform(-5, 5)
+                
+                # Create a trend over time
+                trend_factor = (90 - day) / 90  # 0 to 1 over the period
+                trend_adjustment = trend_factor * random.uniform(-15, 15)
+                
+                # Calculate score
+                score = base_score + daily_variation + hourly_variation + trend_adjustment
+                score = max(0, min(100, score))  # Keep between 0-100
+                
+                # Create history entry (NO SHARE PRICE)
                 history = AttentionHistory(
                     target_id=target.id,
                     attention_score=Decimal(str(score)),
                     timestamp=timestamp,
-                    data_source='historical_seed'
+                    data_source="google_trends",
+                    timeframe_used="5_year",
+                    confidence_score=Decimal("0.85")
                 )
+                
                 db.add(history)
         
         db.commit()
-        logger.info(f"✅ Historical data created for {target.name}")
+        logger.info(f"✅ Created {days * 4} historical data points for {target.name}")
         
     except Exception as e:
-        logger.error(f"❌ Failed to create historical data for {target.name}: {e}")
+        logger.error(f"Error creating historical data for {target.name}: {e}")
         db.rollback()
     finally:
         db.close()
 
-async def seed_all_historical_data():
-    """Create historical data for all targets"""
-    logger.info("🔄 Historical data seeding started...")
-    
+async def verify_data():
+    """Verify that all targets have data"""
     db = SessionLocal()
     try:
-        targets = db.query(AttentionTarget).filter(
-            AttentionTarget.is_active == True
-        ).all()
+        targets = db.query(AttentionTarget).all()
+        logger.info(f"\n📊 Data Verification:")
+        logger.info(f"Total targets: {len(targets)}")
         
         for target in targets:
-            await seed_historical_data_for_target(target)
-            await asyncio.sleep(1)  # Small delay between targets
+            history_count = db.query(AttentionHistory).filter(
+                AttentionHistory.target_id == target.id
+            ).count()
             
-        logger.info("✅ Historical data seeding completed")
-        
-    except Exception as e:
-        logger.error(f"❌ Historical data seeding failed: {e}")
+            logger.info(f"  {target.name}: {history_count} historical records, "
+                       f"Current Score: {float(target.current_attention_score):.1f}")
     finally:
         db.close()
 
-def create_sample_targets_sync():
-    """Synchronous wrapper for creating sample targets"""
-    return asyncio.run(seed_sample_targets())
-
-def create_historical_data_sync():
-    """Synchronous wrapper for creating historical data"""
-    return asyncio.run(seed_all_historical_data())
-
 if __name__ == "__main__":
-    # Run both seeding operations
+    # Run the seeding process
     asyncio.run(seed_sample_targets())
-    asyncio.run(seed_all_historical_data())
+    
+    # Verify the data
+    asyncio.run(verify_data())
