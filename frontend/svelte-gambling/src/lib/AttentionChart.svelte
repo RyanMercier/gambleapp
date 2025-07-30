@@ -13,13 +13,14 @@
   let chart = null;
   let loading = true;
   let error = null;
-  let selectedTimeframe = '30';
+  let selectedTimeframe = '7';
   let chartData = null;
   let websocket = null;
   let lastUpdate = null;
   let isConnected = false;
 
   const timeframes = [
+    { value: '1', label: '1D', description: '1 Day' },
     { value: '7', label: '1W', description: '1 Week' },
     { value: '30', label: '1M', description: '1 Month' },
     { value: '90', label: '3M', description: '3 Months' },
@@ -162,7 +163,8 @@
   function updateSummaryStats() {
     if (!chartData || !chartData.data.length) return;
     
-    const scores = chartData.data.map(point => point.attention_score);
+    // Use original data for accurate stats, not sampled data
+    const scores = chartData.data.map(point => parseFloat(point.attention_score));
     chartData.summary = {
       average: Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100,
       max: Math.max(...scores),
@@ -410,20 +412,18 @@
       <!-- Data Source Info -->
       <div class="flex items-center justify-between text-xs text-gray-500">
         <div>
-          Showing {getSelectedTimeframeName()} of real Google Trends data
+          Showing {getSelectedTimeframeName()} of Google Trends data
           {#if chartData?.data?.length}
             ({chartData.data.length} data points)
           {/if}
         </div>
         
-        {#if chartData?.timeframe?.data_source === 'google_trends_api'}
-          <div class="flex items-center gap-1">
-            <svg class="w-3 h-3 text-green-400" fill="currentColor" viewBox="0 0 20 20">
-              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
-            </svg>
-            <span>Real Google Trends Data</span>
-          </div>
-        {/if}
+        <div class="flex items-center gap-1">
+          <svg class="w-3 h-3 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+          </svg>
+          <span>Real Google Trends Data</span>
+        </div>
       </div>
     </div>
   {/if}

@@ -416,11 +416,17 @@ class GoogleTrendsService:
                 timeline_data = data['default']['timelineData']
                 
                 if timeline_data:
-                    # Extract values
+                    # Extract values and timestamps
                     timeline_values = []
+                    timeline_timestamps = []
+                    
                     for entry in timeline_data:
                         if 'value' in entry and len(entry['value']) > 0:
                             timeline_values.append(entry['value'][0])
+                            
+                            # Extract timestamp if available
+                            if 'time' in entry:
+                                timeline_timestamps.append(entry['time'])
                     
                     if timeline_values:
                         latest_score = timeline_values[-1]
@@ -429,6 +435,7 @@ class GoogleTrendsService:
                             'success': True,
                             'attention_score': float(latest_score),
                             'timeline': timeline_values,
+                            'timeline_timestamps': timeline_timestamps,
                             'timeline_length': len(timeline_values),
                             'average_score': sum(timeline_values) / len(timeline_values),
                             'max_score': max(timeline_values),
@@ -462,203 +469,176 @@ class GoogleTrendsService:
         
         self.last_request_time = time.time()
 
-    async def seed_historical_data(self, target: AttentionTarget, days: int = 7):
-        """Create realistic historical data for the past N days for charts"""
-        db = SessionLocal()
+    def _parse_trends_timestamp(self, trends_time) -> datetime:
+        """Parse Google Trends timestamp format to datetime"""
         try:
-            # Check if we already have historical data
-            existing_history = db.query(AttentionHistory).filter(
-                AttentionHistory.target_id == target.id
-            ).count()
-            
-            if existing_history > 0:
-                logger.info(f"Historical data already exists for {target.name}")
-                return
-            
-            # Generate historical data for past 7 days
-            base_attention = float(target.current_attention_score) if target.current_attention_score else 50.0
-            
-            # Create entries for each day (4 entries per day = every 6 hours)
-            entries_per_day = 4
-            total_entries = days * entries_per_day
-            
-            for i in range(total_entries, 0, -1):  # Go backwards in time
-                # Calculate timestamp (going backwards from now)
-                timestamp = datetime.utcnow() - timedelta(hours=i * 6)
-                
-                # Generate realistic attention score with some trend
-                trend_factor = (total_entries - i) / total_entries  # 0 to 1
-                volatility = random.uniform(-5, 5)  # Random noise
-                
-                attention_score = base_attention + (trend_factor * 10) + volatility
-                attention_score = max(0, min(100, attention_score))  # Keep in 0-100 range
-                
-                # Create history entry with only attention score
-                history_entry = AttentionHistory(
-                    target_id=target.id,
-                    attention_score=Decimal(str(attention_score)),
-                    timestamp=timestamp
-                )
-                db.add(history_entry)
-            
-            db.commit()
-            logger.info(f"Created {total_entries} historical entries for {target.name}")
-            
+            # Google Trends returns different timestamp formats
+            if isinstance(trends_time, (int, float)):
+                # Unix timestamp
+                return datetime.fromtimestamp(trends_time)
+            elif isinstance(trends_time, str):
+                if '-' in trends_time:
+                    # Date format like "2024-01-15"
+                    try:
+                        return datetime.strptime(trends_time, "%Y-%m-%d")
+                    except:
+                        return datetime.strptime(trends_time[:10], "%Y-%m-%d")
+                else:
+                    # String timestamp
+                    return datetime.fromtimestamp(float(trends_time))
         except Exception as e:
-            logger.error(f"Error seeding historical data for {target.name}: {e}")
-            db.rollback()
-        finally:
-            db.close()
+            logger.warning(f"Could not parse timestamp {trends_time}: {e}")
+            # Return a reasonable fallback
+            return datetime.utcnow() - timedelta(days=365)
+
+    def _forward_fill_to_5_minute_intervals(self, real_data_points: list) -> list:
+        """
+        Forward fill real Google Trends data to 5-minute intervals
+        Takes sparse real data and creates dense 5-minute intervals using closest real values
+        """
+        if not real_data_points:
+            return []
+        
+        # Sort by timestamp
+        sorted_data = sorted(real_data_points, key=lambda x: x['timestamp'])
+        
+        # Find the time range (last 5 years to now)
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(days=5*365)  # 5 years ago
+        
+        # Generate 5-minute intervals and forward fill
+        forward_filled = []
+        current_time = start_time
+        current_data_index = 0
+        
+        logger.info(f"🔄 Forward filling {len(sorted_data)} real points to 5-minute intervals")
+        
+        # Find first data point that's >= start_time
+        while (current_data_index < len(sorted_data) and 
+               sorted_data[current_data_index]['timestamp'] < start_time):
+            current_data_index += 1
+        
+        if current_data_index >= len(sorted_data):
+            # If no data points in range, use the last available data point
+            if sorted_data:
+                current_data_index = len(sorted_data) - 1
+            else:
+                logger.warning("No real data points available")
+                return []
+        
+        while current_time <= end_time:
+            # Find the most recent real data point for this timestamp
+            while (current_data_index < len(sorted_data) - 1 and 
+                   sorted_data[current_data_index + 1]['timestamp'] <= current_time):
+                current_data_index += 1
+            
+            # Use the current real data point for this 5-minute interval
+            if current_data_index < len(sorted_data):
+                real_point = sorted_data[current_data_index]
+                
+                forward_filled.append({
+                    'timestamp': current_time,
+                    'attention_score': real_point['attention_score'],
+                    'source_timestamp': real_point['timestamp']  # Track original data point
+                })
+            
+            # Move to next 5-minute interval
+            current_time += timedelta(minutes=5)
+        
+        logger.info(f"✅ Forward filled {len(real_data_points)} real points to {len(forward_filled)} 5-minute intervals")
+        return forward_filled
 
     async def update_target_data(self, target: AttentionTarget, db: Session) -> bool:
-        """Update a single target's attention data"""
+        """Update a single target's attention data with REAL Google Trends only"""
         try:
-            # Get current trends data
+            # Get current trends data (REAL ONLY)
             trends_data = await self.get_google_trends_data(target.search_term)
             new_score = trends_data["attention_score"]
             
-            # Update target with only attention score
+            # Update target
             target.current_attention_score = Decimal(str(new_score))
             target.last_updated = datetime.utcnow()
             
-            # Save historical data with only attention score
+            # Save historical data point with proper source tracking
             history_entry = AttentionHistory(
                 target_id=target.id,
-                attention_score=Decimal(str(new_score))
+                attention_score=Decimal(str(new_score)),
+                timestamp=datetime.utcnow(),
+                data_source="google_trends_real_time",
+                timeframe_used="now",
+                confidence_score=Decimal("1.0")  # Real data = high confidence
             )
             db.add(history_entry)
             
-            source = trends_data.get("source", "unknown")
-            logger.info(f"Updated {target.name}: Score {new_score:.1f} ({source})")
+            logger.info(f"✅ Updated {target.name}: {new_score:.1f}% (REAL Google Trends)")
             return True
             
         except Exception as e:
-            logger.error(f"Error updating {target.name}: {e}")
+            logger.error(f"❌ Error updating {target.name}: {e}")
             return False
 
     async def update_all_targets(self):
-        """Update all active targets with fresh attention data"""
+        """Update all existing active targets with fresh attention data - NO SEEDING"""
         db = SessionLocal()
         try:
-            # Get all active targets
+            # Get all active targets (no seeding, just update existing ones)
             targets = db.query(AttentionTarget).filter(
                 AttentionTarget.is_active == True
             ).all()
             
-            logger.info(f"Updating {len(targets)} targets...")
+            logger.info(f"🔄 Updating {len(targets)} existing targets...")
             
             updated_count = 0
             for target in targets:
-                # Seed historical data if this is the first time
-                await self.seed_historical_data(target)
-                
-                # Add delay to avoid rate limiting
-                await asyncio.sleep(self.min_delay)
-                
+                # Only update existing targets - no seeding
                 if await self.update_target_data(target, db):
                     updated_count += 1
+                
+                # Rate limiting delay
+                await asyncio.sleep(3)
             
             db.commit()
-            logger.info(f"Successfully updated {updated_count}/{len(targets)} targets")
+            logger.info(f"✅ Successfully updated {updated_count}/{len(targets)} targets")
             
         except Exception as e:
-            logger.error(f"Error in update_all_targets: {e}")
+            logger.error(f"❌ Error in update_all_targets: {e}")
             db.rollback()
         finally:
             db.close()
 
-# Background task runner with proper session management
+
+# Background update function (not a class method)
 async def run_data_updates():
-    """Main function to run periodic data updates"""
+    """Main function to run periodic data updates - NO SEEDING"""
     
     while True:
         try:
             async with GoogleTrendsService() as service:
-                logger.info("Starting scheduled data update...")
-                await service.update_all_targets()
+                logger.info("🔄 Starting scheduled data update cycle...")
+                await service.update_all_targets()  # Only update existing targets
                 
-            # Wait 5 minutes before next update (keep your original timing)
-            logger.info("Waiting 5 minutes until next update...")
+            # Wait 5 minutes before next update
+            logger.info("⏰ Waiting 5 minutes until next update...")
             await asyncio.sleep(300)  # 5 minutes = 300 seconds
             
         except Exception as e:
-            logger.error(f"Error in data update cycle: {e}")
+            logger.error(f"❌ Error in data update cycle: {e}")
             # Wait 5 minutes before retrying on error
             await asyncio.sleep(300)
 
-# Seed some initial targets
-async def seed_initial_targets():
-    """Seed the database with popular targets and their historical data"""
-    db = SessionLocal()
-    try:
-        from models import TargetType
-        
-        initial_targets = [
-            # Politicians
-            {"name": "Donald Trump", "type": TargetType.POLITICIAN, "search_term": "Donald Trump"},
-            {"name": "Joe Biden", "type": TargetType.POLITICIAN, "search_term": "Joe Biden"},
-            {"name": "Kamala Harris", "type": TargetType.POLITICIAN, "search_term": "Kamala Harris"},
-            {"name": "Ron DeSantis", "type": TargetType.POLITICIAN, "search_term": "Ron DeSantis"},
-            
-            # Billionaires
-            {"name": "Elon Musk", "type": TargetType.BILLIONAIRE, "search_term": "Elon Musk"},
-            {"name": "Jeff Bezos", "type": TargetType.BILLIONAIRE, "search_term": "Jeff Bezos"},
-            {"name": "Bill Gates", "type": TargetType.BILLIONAIRE, "search_term": "Bill Gates"},
-            {"name": "Warren Buffett", "type": TargetType.BILLIONAIRE, "search_term": "Warren Buffett"},
-            
-            # Countries
-            {"name": "United States", "type": TargetType.COUNTRY, "search_term": "United States"},
-            {"name": "China", "type": TargetType.COUNTRY, "search_term": "China"},
-            {"name": "Japan", "type": TargetType.COUNTRY, "search_term": "Japan"},
-            {"name": "United Kingdom", "type": TargetType.COUNTRY, "search_term": "United Kingdom"},
-            
-            # Stocks (meme potential)
-            {"name": "Tesla", "type": TargetType.STOCK, "search_term": "Tesla"},
-            {"name": "GameStop", "type": TargetType.STOCK, "search_term": "GameStop"},
-            {"name": "AMC", "type": TargetType.STOCK, "search_term": "AMC"},
-            {"name": "Bitcoin", "type": TargetType.STOCK, "search_term": "Bitcoin"},
-        ]
-        
-        async with GoogleTrendsService() as service:
-            for target_data in initial_targets:
-                # Check if target already exists
-                existing = db.query(AttentionTarget).filter(
-                    AttentionTarget.name == target_data["name"]
-                ).first()
-                
-                if not existing:
-                    # Get initial attention score
-                    trends_data = await service.get_google_trends_data(target_data["search_term"])
-                    initial_score = trends_data["attention_score"]
-                    
-                    target = AttentionTarget(
-                        name=target_data["name"],
-                        type=target_data["type"],
-                        search_term=target_data["search_term"],
-                        current_attention_score=Decimal(str(initial_score)),
-                        description=f"Attention score for {target_data['name']}"
-                    )
-                    
-                    db.add(target)
-                    db.commit()
-                    db.refresh(target)
-                    
-                    # Seed historical data
-                    await service.seed_historical_data(target, days=7)
-                    
-                    logger.info(f"Added target: {target_data['name']} (Score: {initial_score:.1f})")
-                    
-                    # Delay between requests
-                    await asyncio.sleep(service.min_delay)
-        
-        db.commit()
-        logger.info("Initial targets seeded successfully with historical data!")
-        
-    except Exception as e:
-        logger.error(f"Error seeding targets: {e}")
-        db.rollback()
-    finally:
-        db.close()
+
+def get_service_status() -> Dict:
+    """Get status information about the Google Trends service"""
+    return {
+        "service": "GoogleTrendsService",
+        "version": "real_data_only_version",
+        "data_source": "google_trends_api_with_fallbacks",
+        "update_interval": "5_minutes",
+        "rate_limiting": "3_seconds",
+        "fallback_enabled": True,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
 
 # Convenience function for external usage
 async def get_trend_score(search_term: str) -> float:
@@ -667,19 +647,7 @@ async def get_trend_score(search_term: str) -> float:
         trends_data = await service.get_google_trends_data(search_term)
         return trends_data.get("attention_score", 0.0)
 
-def get_service_status() -> Dict:
-    """Get status information about the Google Trends service"""
-    return {
-        "service": "GoogleTrendsService",
-        "version": "original_working_version",
-        "data_source": "google_trends_api_with_fallbacks",
-        "update_interval": "5_minutes",
-        "rate_limiting": "3_seconds",
-        "fallback_enabled": True,
-        "timestamp": datetime.utcnow().isoformat()
-    }
 
 if __name__ == "__main__":
-    # Run the seeder first, then start the update service
-    asyncio.run(seed_initial_targets())
+    # Only run the update service - NO SEEDING (that's seed_data.py's job)
     asyncio.run(run_data_updates())

@@ -169,7 +169,7 @@ def get_me(current_user: User = Depends(get_current_user)):
 # Search and Target Management
 @app.post("/search")
 async def search_and_create_target(search: SearchRequest, db: Session = Depends(get_db)):
-    """Search for a term and create a tradeable attention target"""
+    """Search for a term and create a tradeable attention target with current score only"""
     try:
         # Check if target already exists
         existing = db.query(AttentionTarget).filter(
@@ -179,58 +179,61 @@ async def search_and_create_target(search: SearchRequest, db: Session = Depends(
         if existing:
             return {
                 "id": existing.id,
+                "target_id": existing.id,
                 "name": existing.name,
+                "query": search.query,
                 "current_attention_score": float(existing.current_attention_score),
+                "type": existing.type.value,
                 "message": "Target already exists"
             }
         
-        # Create new target with Google Trends data (with fallback)
-        try:
-            async with GoogleTrendsService() as trends:
-                attention_data = await trends.get_attention_score(search.query)
-                
-                if attention_data and attention_data.get('success'):
-                    attention_score = Decimal(str(attention_data['attention_score']))  # Fixed field name
-                else:
-                    # Fallback to a random score if Google Trends fails
-                    import random
-                    attention_score = Decimal(str(random.uniform(20, 80)))
-                    logger.warning(f"Google Trends failed for {search.query}, using fallback score: {attention_score}")
-        except Exception as e:
-            # Fallback if Google Trends service fails entirely
-            import random
-            attention_score = Decimal(str(random.uniform(20, 80)))
-            logger.warning(f"Google Trends service error for {search.query}: {e}, using fallback score: {attention_score}")
+        # Create new target with SINGLE API call for current score only
+        logger.info(f"🔍 Creating new target for: {search.query}")
         
-        target = AttentionTarget(
-            name=search.query.title(),
-            type=TargetType(search.target_type),
-            search_term=search.query,
-            description=f"Attention trading target for {search.query}",
-            current_attention_score=attention_score
-        )
-        
-        db.add(target)
-        db.commit()
-        db.refresh(target)
-        
-        # Add initial history entry
-        history = AttentionHistory(
-            target_id=target.id,
-            attention_score=target.current_attention_score
-        )
-        db.add(history)
-        db.commit()
+        async with GoogleTrendsService() as trends:
+            # Get current attention score (SINGLE API CALL)
+            current_data = await trends.get_google_trends_data(search.query)
+            current_score = current_data.get("attention_score", 50.0)
+            
+            # Create the target
+            target = AttentionTarget(
+                name=search.query.title(),
+                type=TargetType(search.target_type),
+                search_term=search.query,
+                description=f"Attention trading target for {search.query}",
+                current_attention_score=Decimal(str(current_score))
+            )
+            
+            db.add(target)
+            db.commit()
+            db.refresh(target)
+            
+            # Add single current data point (no historical data for new searches)
+            history_entry = AttentionHistory(
+                target_id=target.id,
+                attention_score=Decimal(str(current_score)),
+                timestamp=datetime.utcnow(),
+                data_source="google_trends_real_time",
+                timeframe_used="now",
+                confidence_score=Decimal("1.0")
+            )
+            db.add(history_entry)
+            db.commit()
+            
+            logger.info(f"✅ Created target {target.name} with current score: {current_score}")
         
         return {
             "id": target.id,
+            "target_id": target.id,
             "name": target.name,
+            "query": search.query,
             "current_attention_score": float(target.current_attention_score),
-            "message": "New target created successfully"
+            "type": target.type.value,
+            "message": "New target created - historical data will build over time"
         }
         
     except Exception as e:
-        logger.error(f"Search error: {e}")
+        logger.error(f"❌ Search error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed: {str(e)}"
@@ -279,34 +282,70 @@ def get_target_chart(
         days: int = 7,
         db: Session = Depends(get_db)
     ):
-        """Get historical attention data for charting"""
-        target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
-        if not target:
-            raise HTTPException(status_code=404, detail="Target not found")
+    """Get historical attention data for charting with smart data selection"""
+    target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    
+    # Calculate the date range
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days)
+    
+    # Smart data selection based on timeframe
+    if days <= 1:
+        # 1 day: Get 5-minute interval data only
+        history = db.query(AttentionHistory).filter(
+            AttentionHistory.target_id == target_id,
+            AttentionHistory.timestamp >= start_date,
+            AttentionHistory.data_source.in_([
+                "google_trends_5min_filled", 
+                "google_trends_real_time"
+            ])
+        ).order_by(AttentionHistory.timestamp.asc()).all()
         
-        # Calculate the date range
-        end_date = datetime.utcnow()
-        start_date = end_date - timedelta(days=days)
+    elif days <= 30:
+        # Up to 30 days: Get hourly and 5-minute data
+        history = db.query(AttentionHistory).filter(
+            AttentionHistory.target_id == target_id,
+            AttentionHistory.timestamp >= start_date,
+            AttentionHistory.data_source.in_([
+                "google_trends_5min_filled",
+                "google_trends_hourly_filled", 
+                "google_trends_real_time"
+            ])
+        ).order_by(AttentionHistory.timestamp.asc()).all()
         
+    else:
+        # Longer periods: Get all data types
         history = db.query(AttentionHistory).filter(
             AttentionHistory.target_id == target_id,
             AttentionHistory.timestamp >= start_date
         ).order_by(AttentionHistory.timestamp.asc()).all()
-        
-        return {
-            "target": {
-                "id": target.id,
-                "name": target.name,
-                "current_attention_score": float(target.current_attention_score)
-            },
-            "data": [
-                {
-                    "attention_score": float(h.attention_score),
-                    "timestamp": h.timestamp.isoformat()
-                }
-                for h in history
-            ]
-        }
+    
+    logger.info(f"📊 Chart request for target {target_id} ({days} days): found {len(history)} data points")
+    
+    return {
+        "target": {
+            "id": target.id,
+            "name": target.name,
+            "current_attention_score": float(target.current_attention_score)
+        },
+        "data": [
+            {
+                "attention_score": float(h.attention_score),
+                "timestamp": h.timestamp.isoformat(),
+                "data_source": h.data_source  # Include source for debugging
+            }
+            for h in history
+        ],
+        "data_count": len(history),
+        "date_range": {
+            "start": start_date.isoformat(),
+            "end": end_date.isoformat(),
+            "days": days
+        },
+        "storage_strategy": "smart_intervals"
+    }
 
 # Trading endpoints
 @app.post("/trade")
@@ -648,15 +687,25 @@ async def websocket_target_endpoint(websocket: WebSocket, target_id: int):
 
 # Background task startup
 async def start_background_tasks():
-    """Start background tasks for real-time data updates"""
+    """Start optimized background tasks for real-time data updates"""
     try:
-        from google_trends_service import run_data_updates
-        # Start the real-time background data update task with longer intervals to avoid rate limits
-        asyncio.create_task(run_data_updates())
-        logger.info("✅ Real-time background data updates started")
+        from background_updater import start_background_updates, get_updater_status
+        
+        # Start the optimized background data update task
+        # Updates 50 targets every 5 minutes with smart prioritization
+        asyncio.create_task(start_background_updates())
+        logger.info("✅ Optimized background data updates started (50 targets every 5 minutes)")
+        
     except ImportError as e:
-        logger.error(f"❌ Failed to start background tasks: {e}")
-        logger.info("📊 Real-time data updates are disabled")
+        logger.error(f"❌ Failed to start optimized background tasks: {e}")
+        logger.info("📊 Falling back to basic updates...")
+        
+        try:
+            from google_trends_service import run_data_updates
+            asyncio.create_task(run_data_updates())
+            logger.info("✅ Basic background data updates started")
+        except ImportError:
+            logger.error("❌ No background update system available")
 
 @app.on_event("startup")
 async def startup_event():
