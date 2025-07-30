@@ -224,7 +224,6 @@ async def search_and_create_target(search: SearchRequest, db: Session = Depends(
         
         return {
             "id": target.id,
-            "target_id": target.id,  # Add this for frontend compatibility
             "name": target.name,
             "current_attention_score": float(target.current_attention_score),
             "message": "New target created successfully"
