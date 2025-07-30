@@ -1,232 +1,158 @@
-"""
-Run this script to populate the database with initial data.
-Usage: python seed_data.py
-"""
-
 import asyncio
-from sqlalchemy.orm import sessionmaker
-from database import engine
-from models import AttentionTarget, User, TargetType
-from datetime import datetime, timedelta
+from database import SessionLocal
+from models import AttentionTarget, TargetType, AttentionHistory
+from google_trends_service import GoogleTrendsService
 from decimal import Decimal
-import random
+import logging
 
-SessionLocal = sessionmaker(bind=engine)
-
-def create_admin_user():
-    db = SessionLocal()
-    
-    # Check if admin user exists
-    admin = db.query(User).filter(User.username == "admin").first()
-    if not admin:
-        from auth import hash_password
-        admin = User(
-            username="admin",
-            email="admin@trendbet.com",
-            password_hash=hash_password("admin123"),
-            balance=Decimal("10000.00")
-        )
-        db.add(admin)
-        db.commit()
-        print("Admin user created successfully! (username: admin, password: admin123)")
-    else:
-        print("Admin user already exists.")
-    
-    db.close()
+logger = logging.getLogger(__name__)
 
 async def seed_sample_targets():
-    """Seed initial attention targets for each category"""
-    db = SessionLocal()
+    """Seed database with sample targets using real Google Trends data"""
     
+    logger.info("🌱 Seeding sample targets with real Google Trends data...")
+    
+    # Sample targets to create
     sample_targets = [
         # Politicians
-        {
-            "name": "Donald Trump",
-            "type": TargetType.POLITICIAN,
-            "search_term": "Donald Trump",
-            "description": "Former and current US President - attention tracking"
-        },
-        {
-            "name": "Joe Biden", 
-            "type": TargetType.POLITICIAN,
-            "search_term": "Joe Biden",
-            "description": "US President - political attention tracking"
-        },
-        {
-            "name": "Kamala Harris",
-            "type": TargetType.POLITICIAN, 
-            "search_term": "Kamala Harris",
-            "description": "US Vice President - political attention tracking"
-        },
-        {
-            "name": "Ron DeSantis",
-            "type": TargetType.POLITICIAN,
-            "search_term": "Ron DeSantis", 
-            "description": "Florida Governor - political attention tracking"
-        },
+        ("Donald Trump", "donald trump", TargetType.POLITICIAN),
+        ("Joe Biden", "joe biden", TargetType.POLITICIAN),
+        ("Kamala Harris", "kamala harris", TargetType.POLITICIAN),
         
-        # Billionaires
-        {
-            "name": "Elon Musk",
-            "type": TargetType.BILLIONAIRE,
-            "search_term": "Elon Musk",
-            "description": "CEO of Tesla and SpaceX - billionaire attention tracking"
-        },
-        {
-            "name": "Jeff Bezos",
-            "type": TargetType.BILLIONAIRE,
-            "search_term": "Jeff Bezos", 
-            "description": "Founder of Amazon - billionaire attention tracking"
-        },
-        {
-            "name": "Bill Gates",
-            "type": TargetType.BILLIONAIRE,
-            "search_term": "Bill Gates",
-            "description": "Microsoft founder - billionaire attention tracking"
-        },
-        {
-            "name": "Warren Buffett",
-            "type": TargetType.BILLIONAIRE,
-            "search_term": "Warren Buffett",
-            "description": "Berkshire Hathaway CEO - investor attention tracking"
-        },
+        # Billionaires  
+        ("Elon Musk", "elon musk", TargetType.BILLIONAIRE),
+        ("Jeff Bezos", "jeff bezos", TargetType.BILLIONAIRE),
+        ("Bill Gates", "bill gates", TargetType.BILLIONAIRE),
         
         # Countries
-        {
-            "name": "United States",
-            "type": TargetType.COUNTRY,
-            "search_term": "United States",
-            "description": "USA - country attention tracking"
-        },
-        {
-            "name": "China",
-            "type": TargetType.COUNTRY,
-            "search_term": "China",
-            "description": "People's Republic of China - country attention tracking"
-        },
-        {
-            "name": "Japan",
-            "type": TargetType.COUNTRY,
-            "search_term": "Japan", 
-            "description": "Japan - country attention tracking"
-        },
-        {
-            "name": "United Kingdom",
-            "type": TargetType.COUNTRY,
-            "search_term": "United Kingdom",
-            "description": "UK - country attention tracking"
-        },
+        ("United States", "united states", TargetType.COUNTRY),
+        ("China", "china", TargetType.COUNTRY),
+        ("Japan", "japan", TargetType.COUNTRY),
         
-        # Stocks/Meme Stocks
-        {
-            "name": "Tesla",
-            "type": TargetType.STOCK,
-            "search_term": "Tesla",
-            "description": "Tesla Inc - meme stock attention tracking"
-        },
-        {
-            "name": "GameStop", 
-            "type": TargetType.STOCK,
-            "search_term": "GameStop",
-            "description": "GameStop Corp - meme stock attention tracking"
-        },
-        {
-            "name": "AMC",
-            "type": TargetType.STOCK,
-            "search_term": "AMC",
-            "description": "AMC Entertainment - meme stock attention tracking"
-        },
-        {
-            "name": "Bitcoin",
-            "type": TargetType.STOCK,
-            "search_term": "Bitcoin",
-            "description": "Bitcoin cryptocurrency - digital asset attention tracking"
-        }
+        # Stocks/Crypto/Tech
+        ("Tesla", "tesla", TargetType.STOCK),
+        ("Bitcoin", "bitcoin", TargetType.STOCK),
+        ("Artificial Intelligence", "artificial intelligence", TargetType.STOCK),
     ]
     
+    db = SessionLocal()
+    
     try:
-        from google_trends_service import GoogleTrendsService
+        # Check if targets already exist
+        existing_count = db.query(AttentionTarget).count()
+        if existing_count > 0:
+            logger.info(f"Database already has {existing_count} targets, skipping seed")
+            return
+        
+        created_count = 0
         
         async with GoogleTrendsService() as service:
-            for target_data in sample_targets:
-                existing = db.query(AttentionTarget).filter(
-                    AttentionTarget.name == target_data["name"]
-                ).first()
-                
-                if not existing:
-                    # Get initial attention score from Google Trends
-                    try:
-                        trends_data = await service.get_google_trends_data(target_data["search_term"])
-                        base_attention_score = trends_data.get("attention_score", random.uniform(20.0, 80.0))
-                    except Exception as e:
-                        print(f"Failed to get trends data for {target_data['name']}: {e}")
-                        base_attention_score = random.uniform(20.0, 80.0)
+            for name, search_term, target_type in sample_targets:
+                try:
+                    logger.info(f"📊 Creating target: {name}")
                     
-                    base_price = random.uniform(8.0, 15.0)
+                    # Get real Google Trends data
+                    trends_data = await service.get_google_trends_data(search_term, 'now 7-d')
+                    attention_score = trends_data.get("attention_score", 50.0)
                     
+                    # Create the target
                     target = AttentionTarget(
-                        name=target_data["name"],
-                        type=target_data["type"],
-                        search_term=target_data["search_term"],
-                        description=target_data["description"],
-                        current_attention_score=Decimal(str(base_attention_score)),
-                        current_share_price=Decimal(str(base_price))
+                        name=name,
+                        type=target_type,
+                        search_term=search_term,
+                        current_attention_score=Decimal(str(attention_score)),
+                        description=f"Real-time attention tracking for {name}",
+                        baseline_period="5_year"
                     )
+                    
                     db.add(target)
                     db.commit()
                     db.refresh(target)
                     
-                    # Seed historical data
-                    await service.seed_historical_data(target, days=7)
+                    # Initial history entry
+                    history = AttentionHistory(
+                        target_id=target.id,
+                        attention_score=Decimal(str(attention_score)),
+                        data_source='google_trends_api',
+                        timeframe_used='7_day'
+                    )
+                    db.add(history)
+                    db.commit()
                     
-                    print(f"Added target: {target_data['name']} (Score: {base_attention_score:.1f}, Price: ${base_price:.2f})")
+                    created_count += 1
+                    logger.info(f"✅ Created {name}: {attention_score}%")
                     
-                    # Add delay between requests to be nice to Google
-                    await asyncio.sleep(service.min_delay)
+                    # Seed 5-year historical data in background (don't wait)
+                    asyncio.create_task(service.seed_historical_data(target, days=1825))
+                    
+                    # Rate limiting to avoid overwhelming Google Trends
+                    await asyncio.sleep(3)
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to create target {name}: {e}")
+                    db.rollback()
+                    continue
+        
+        logger.info(f"✅ Sample data seeding completed: {created_count} targets created")
+        
+        # Start background historical data seeding
+        logger.info("🔄 Historical data seeding started in background...")
+        
+    except Exception as e:
+        logger.error(f"❌ Sample data seeding failed: {e}")
+        db.rollback()
+        raise
     
-    except ImportError:
-        print("Google Trends service not available, using random data...")
-        # Fallback to random data if service not available
-        for target_data in sample_targets:
-            existing = db.query(AttentionTarget).filter(
-                AttentionTarget.name == target_data["name"]
-            ).first()
-            
-            if not existing:
-                base_attention_score = random.uniform(20.0, 80.0)
-                base_price = random.uniform(8.0, 15.0)
-                
-                target = AttentionTarget(
-                    name=target_data["name"],
-                    type=target_data["type"],
-                    search_term=target_data["search_term"],
-                    description=target_data["description"],
-                    current_attention_score=Decimal(str(base_attention_score)),
-                    current_share_price=Decimal(str(base_price))
-                )
-                db.add(target)
-                print(f"Added target: {target_data['name']} (Score: {base_attention_score:.1f}, Price: ${base_price:.2f})")
+    finally:
+        db.close()
+
+def create_test_user():
+    """Create a test user for development"""
+    from models import User
+    from auth import hash_password
+    from decimal import Decimal
     
-    db.commit()
-    print("Sample attention targets seeded successfully!")
-    db.close()
+    db = SessionLocal()
+    
+    try:
+        # Check if test user exists
+        test_user = db.query(User).filter(User.username == "testuser").first()
+        if test_user:
+            logger.info("Test user already exists")
+            return
+        
+        # Create test user
+        test_user = User(
+            username="testuser",
+            email="test@trendbet.com",
+            password_hash=hash_password("password123"),
+            balance=Decimal("1000.00")
+        )
+        
+        db.add(test_user)
+        db.commit()
+        
+        logger.info("✅ Test user created (username: testuser, password: password123)")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to create test user: {e}")
+        db.rollback()
+    
+    finally:
+        db.close()
 
-# For backwards compatibility with the old function names
-def seed_categories():
-    """Legacy function - categories are now handled by TargetType enum"""
-    print("Categories are now handled by TargetType enum - no separate table needed")
-
-async def seed_sample_trends():
-    """Legacy function - redirects to seed_sample_targets"""
+async def seed_development_data():
+    """Seed all development data"""
+    logger.info("🌱 Seeding development data...")
+    
+    # Create test user
+    create_test_user()
+    
+    # Create sample targets with real data
     await seed_sample_targets()
-
-async def main():
-    """Main seeding function"""
-    print("Seeding TrendBet database...")
-    create_admin_user()
-    seed_categories()
-    await seed_sample_targets()
-    print("Database seeding completed!")
+    
+    logger.info("✅ Development data seeding completed")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Run seeding directly
+    asyncio.run(seed_development_data())
