@@ -285,48 +285,44 @@
     {/if}
 
     <!-- Popular Targets -->
-    <div class="card">
-      <div class="flex items-center justify-between mb-6">
-        <h2 class="text-xl font-semibold">🔥 Trending Now</h2>
-        <p class="text-sm text-gray-400">Top targets by attention score</p>
+    {#if popularTargets.length > 0}
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {#each popularTargets as target}
+          <button
+            class="p-4 bg-white/5 rounded-lg hover:bg-white/10 transition-all text-left group"
+            on:click={() => selectPopularTarget(target)}
+          >
+            <div class="flex items-center gap-3 mb-2">
+              <span class="text-2xl">{getTypeIcon(target.type)}</span>
+              <div class="flex-1 min-w-0">
+                <h3 class="font-medium truncate group-hover:text-blue-400 transition-colors">
+                  {target.name}
+                </h3>
+                <p class="text-xs text-gray-400 capitalize">{target.type}</p>
+              </div>
+            </div>
+            
+            <div class="space-y-1">
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-400">Attention:</span>
+                <!-- FIX: Use current_attention_score instead of attention_score -->
+                <span class="font-medium">{formatNumber(target.current_attention_score || 0)}</span>
+              </div>
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-400">Updated:</span>
+                <span class="font-medium text-blue-400">
+                  {target.last_updated ? new Date(target.last_updated).toLocaleDateString() : 'Never'}
+                </span>
+              </div>
+            </div>
+          </button>
+        {/each}
       </div>
-      
-      {#if popularTargets.length > 0}
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {#each popularTargets as target}
-            <button
-              class="p-4 bg-white/5 rounded-lg hover:bg-white/10 transition-all text-left group"
-              on:click={() => selectPopularTarget(target)}
-            >
-              <div class="flex items-center gap-3 mb-2">
-                <span class="text-2xl">{getTypeIcon(target.type)}</span>
-                <div class="flex-1 min-w-0">
-                  <h3 class="font-medium truncate group-hover:text-blue-400 transition-colors">
-                    {target.name}
-                  </h3>
-                  <p class="text-xs text-gray-400 capitalize">{target.type}</p>
-                </div>
-              </div>
-              
-              <div class="space-y-1">
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-400">Attention:</span>
-                  <span class="font-medium">{formatNumber(target.attention_score)}</span>
-                </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-400">Price:</span>
-                  <span class="font-medium text-emerald-400">{formatPrice(target.current_price)}</span>
-                </div>
-              </div>
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <div class="text-center py-8 text-gray-400">
-          <div class="text-3xl mb-2">📊</div>
-          <p>Loading trending targets...</p>
-        </div>
-      {/if}
-    </div>
+    {:else}
+      <div class="text-center py-8 text-gray-400">
+        <div class="text-3xl mb-2">📊</div>
+        <p>Loading trending targets...</p>
+      </div>
+    {/if}
   </div>
 </div>

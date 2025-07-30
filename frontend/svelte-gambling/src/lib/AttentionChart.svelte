@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import Chart from 'chart.js/auto';
+  import apiFetch from '$lib/api'; // FIX: Import the API utility
 
   export let targetId;
   export let targetName = '';
@@ -28,11 +29,16 @@
   ];
 
   onMount(async () => {
+    console.log('AttentionChart mounted with targetId:', targetId); // Debug log
     if (targetId) {
       await loadChart();
       if (autoUpdate) {
         connectWebSocket();
       }
+    } else {
+      console.error('AttentionChart: No targetId provided');
+      error = 'No target ID provided';
+      loading = false;
     }
   });
 
@@ -163,14 +169,27 @@
   }
 
   async function loadChart() {
+    if (!targetId) {
+      console.error('loadChart: No targetId provided');
+      error = 'No target ID provided for chart';
+      loading = false;
+      return;
+    }
+
     loading = true;
     error = null;
+    console.log(`Loading chart for targetId: ${targetId}, timeframe: ${selectedTimeframe}`);
 
     try {
-      const response = await fetch(`/api/targets/${targetId}/chart?days=${selectedTimeframe}`);
-      if (!response.ok) throw new Error('Failed to load chart data');
+      // FIX: Use apiFetch instead of fetch and correct URL format
+      chartData = await apiFetch(`/targets/${targetId}/chart?days=${selectedTimeframe}`);
       
-      chartData = await response.json();
+      console.log('Chart data received:', chartData);
+      
+      // Verify we have data
+      if (!chartData || !chartData.data || chartData.data.length === 0) {
+        throw new Error('No chart data available');
+      }
       
       // Verify we have real Google Trends data
       if (chartData.timeframe?.data_source !== 'google_trends_api') {
@@ -180,7 +199,7 @@
       renderChart(chartData);
     } catch (err) {
       error = err.message;
-      console.error('Chart loading error:', err);
+      console.error('Chart loading error for targetId', targetId, ':', err);
     } finally {
       loading = false;
     }
@@ -189,6 +208,7 @@
   async function changeTimeframe(newTimeframe) {
     if (selectedTimeframe === newTimeframe) return;
     
+    console.log(`Changing timeframe from ${selectedTimeframe} to ${newTimeframe}`);
     selectedTimeframe = newTimeframe;
     await loadChart();
   }
@@ -196,7 +216,12 @@
   function renderChart(data) {
       destroyChart();
 
-      if (!chartCanvas || !data.data.length) return;
+      if (!chartCanvas || !data.data.length) {
+        console.error('Cannot render chart: missing canvas or data');
+        return;
+      }
+
+      console.log(`Rendering chart with ${data.data.length} data points`);
 
       const ctx = chartCanvas.getContext('2d');
       
@@ -286,6 +311,9 @@
           }
         }
       });
+
+      // Update summary stats after rendering
+      updateSummaryStats();
   }
 
   function destroyChart() {
@@ -394,7 +422,7 @@
       <div class="absolute inset-0 flex items-center justify-center">
         <div class="flex flex-col items-center gap-3">
           <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-          <span class="text-gray-400 text-sm">Loading real Google Trends data...</span>
+          <span class="text-gray-400 text-sm">Loading chart for target {targetId}...</span>
         </div>
       </div>
     {:else if error}
@@ -406,6 +434,7 @@
             </svg>
           </div>
           <div class="text-red-400 font-medium">{error}</div>
+          <div class="text-gray-400 text-sm mt-1">Target ID: {targetId}</div>
           <button 
             class="mt-2 text-blue-400 hover:text-blue-300 text-sm underline"
             on:click={loadChart}
@@ -419,7 +448,7 @@
         <div class="text-center">
           <div class="text-4xl mb-2">📊</div>
           <div>No Google Trends data available</div>
-          <div class="text-sm mt-1">Data is being collected...</div>
+          <div class="text-sm mt-1">Data is being collected for target {targetId}...</div>
         </div>
       </div>
     {:else}
