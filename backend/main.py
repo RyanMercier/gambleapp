@@ -3,6 +3,7 @@ from fastapi import FastAPI, Depends, HTTPException, status, Query, BackgroundTa
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime, timedelta
@@ -277,52 +278,43 @@ def get_target_detail(target_id: int, db: Session = Depends(get_db)):
     }
 
 @app.get("/targets/{target_id}/chart")
-def get_target_chart(
-        target_id: int, 
-        days: int = 7,
-        db: Session = Depends(get_db)
-    ):
-    """Get historical attention data for charting with smart data selection"""
+def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(get_db)):
+    """Get chart data with proper timestamp-based sampling"""
+    
     target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
     
-    # Calculate the date range
-    end_date = datetime.utcnow()
-    start_date = end_date - timedelta(days=days)
+    end_time = datetime.utcnow()
+    start_time = end_time - timedelta(days=days)
     
-    # Smart data selection based on timeframe
-    if days <= 1:
-        # 1 day: Get 5-minute interval data only
-        history = db.query(AttentionHistory).filter(
-            AttentionHistory.target_id == target_id,
-            AttentionHistory.timestamp >= start_date,
-            AttentionHistory.data_source.in_([
-                "google_trends_5min_filled", 
-                "google_trends_real_time"
-            ])
-        ).order_by(AttentionHistory.timestamp.asc()).all()
-        
-    elif days <= 30:
-        # Up to 30 days: Get hourly and 5-minute data
-        history = db.query(AttentionHistory).filter(
-            AttentionHistory.target_id == target_id,
-            AttentionHistory.timestamp >= start_date,
-            AttentionHistory.data_source.in_([
-                "google_trends_5min_filled",
-                "google_trends_hourly_filled", 
-                "google_trends_real_time"
-            ])
-        ).order_by(AttentionHistory.timestamp.asc()).all()
-        
-    else:
-        # Longer periods: Get all data types
-        history = db.query(AttentionHistory).filter(
-            AttentionHistory.target_id == target_id,
-            AttentionHistory.timestamp >= start_date
-        ).order_by(AttentionHistory.timestamp.asc()).all()
+    # Generate the exact timestamps we want based on timeframe
+    target_timestamps = generate_target_timestamps(start_time, end_time, days)
     
-    logger.info(f"📊 Chart request for target {target_id} ({days} days): found {len(history)} data points")
+    # Get data points closest to our target timestamps
+    sampled_data = []
+    
+    for target_ts in target_timestamps:
+        # Find the closest data point to this timestamp
+        closest_point = db.query(AttentionHistory).filter(
+            AttentionHistory.target_id == target_id,
+            AttentionHistory.timestamp <= target_ts + timedelta(minutes=30),  # Look within 30 min window
+            AttentionHistory.timestamp >= target_ts - timedelta(minutes=30)
+        ).order_by(
+            func.abs(func.extract('epoch', AttentionHistory.timestamp - target_ts))
+        ).first()
+        
+        if closest_point:
+            sampled_data.append({
+                "timestamp": target_ts,  # Use target timestamp for consistent spacing
+                "attention_score": float(closest_point.attention_score),
+                "data_source": closest_point.data_source,
+                "actual_timestamp": closest_point.timestamp  # Keep actual for debugging
+            })
+    
+    granularity_info = get_granularity_info(days)
+    
+    logger.info(f"📊 Chart for target {target_id} ({days} days): {len(sampled_data)} points at {granularity_info['interval']} intervals")
     
     return {
         "target": {
@@ -332,20 +324,76 @@ def get_target_chart(
         },
         "data": [
             {
-                "attention_score": float(h.attention_score),
-                "timestamp": h.timestamp.isoformat(),
-                "data_source": h.data_source  # Include source for debugging
+                "attention_score": point["attention_score"],
+                "timestamp": point["timestamp"].isoformat(),
+                "data_source": point["data_source"]
             }
-            for h in history
+            for point in sampled_data
         ],
-        "data_count": len(history),
+        "data_count": len(sampled_data),
         "date_range": {
-            "start": start_date.isoformat(),
-            "end": end_date.isoformat(),
+            "start": start_time.isoformat(),
+            "end": end_time.isoformat(),
             "days": days
         },
-        "storage_strategy": "smart_intervals"
+        "sampling_info": {
+            "points_returned": len(sampled_data),
+            "granularity": granularity_info["name"],
+            "interval": granularity_info["interval"]
+        }
     }
+
+
+def generate_target_timestamps(start_time: datetime, end_time: datetime, days: int) -> list:
+    """Generate evenly spaced target timestamps based on timeframe"""
+    
+    timestamps = []
+    
+    if days <= 1:
+        # 1 day: Every 15 minutes
+        interval = timedelta(minutes=15)
+        granularity = "15_minutes"
+    elif days <= 7:
+        # 1 week: Every hour
+        interval = timedelta(hours=1)
+        granularity = "1_hour"
+    elif days <= 30:
+        # 1 month: Every 8 hours
+        interval = timedelta(hours=8)
+        granularity = "8_hours"
+    elif days <= 365:
+        # 1 year: Every 5 days
+        interval = timedelta(days=5)
+        granularity = "5_days"
+    else:
+        # 5+ years: Every week
+        interval = timedelta(weeks=1)
+        granularity = "1_week"
+    
+    current_time = start_time
+    while current_time <= end_time:
+        timestamps.append(current_time)
+        current_time += interval
+    
+    # Always include end time if it's not already included
+    if not timestamps or timestamps[-1] < end_time:
+        timestamps.append(end_time)
+    
+    return timestamps
+
+
+def get_granularity_info(days: int) -> dict:
+    """Get granularity information for given timeframe"""
+    if days <= 1:
+        return {"name": "15_minutes", "interval": "15 minutes"}
+    elif days <= 7:
+        return {"name": "1_hour", "interval": "1 hour"}
+    elif days <= 30:
+        return {"name": "8_hours", "interval": "8 hours"}
+    elif days <= 365:
+        return {"name": "5_days", "interval": "5 days"}
+    else:
+        return {"name": "1_week", "interval": "1 week"}
 
 # Trading endpoints
 @app.post("/trade")

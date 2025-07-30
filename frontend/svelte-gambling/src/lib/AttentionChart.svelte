@@ -142,14 +142,40 @@
   function updateChartData() {
     if (!chart || !chartData) return;
     
+    // No more client-side filtering - just display the data from backend
     const labels = chartData.data.map(point => {
       const date = new Date(point.timestamp);
-      if (selectedTimeframe <= 30) {
-        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit' });
+      
+      // Adjust label format based on sampling granularity
+      const samplingInfo = chartData.sampling_info;
+      
+      if (samplingInfo?.granularity?.includes('minutes') || selectedTimeframe <= 1) {
+        // For minute/hourly data, show time
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric', 
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      } else if (samplingInfo?.granularity?.includes('hour') || selectedTimeframe <= 7) {
+        // For hourly data, show date + hour
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric', 
+          hour: '2-digit' 
+        });
       } else if (selectedTimeframe <= 365) {
-        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        // For daily/weekly data, show date only
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric' 
+        });
       } else {
-        return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
+        // For monthly/yearly data, show month/year
+        return date.toLocaleDateString('en-US', { 
+          year: 'numeric', 
+          month: 'short' 
+        });
       }
     });
     
@@ -163,7 +189,7 @@
   function updateSummaryStats() {
     if (!chartData || !chartData.data.length) return;
     
-    // Use original data for accurate stats, not sampled data
+    // Calculate stats from the sampled data (which is representative)
     const scores = chartData.data.map(point => parseFloat(point.attention_score));
     chartData.summary = {
       average: Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100,
@@ -172,7 +198,8 @@
       latest: scores[scores.length - 1],
       change_percent: scores.length > 1 ? 
         Math.round(((scores[scores.length - 1] - scores[0]) / scores[0] * 100) * 100) / 100 : 0,
-      data_points: scores.length
+      data_points: chartData.sampling_info?.total_points_available || scores.length,
+      sampled_points: scores.length
     };
   }
 
@@ -186,20 +213,21 @@
 
     loading = true;
     error = null;
-    console.log(`Loading chart for targetId: ${targetId}, timeframe: ${selectedTimeframe}`);
+    console.log(`Loading chart for targetId: ${targetId}, timeframe: ${selectedTimeframe} days`);
 
     try {
-      // FIX: Use apiFetch instead of fetch and correct URL format
+      // Backend now handles intelligent sampling based on timeframe
       chartData = await apiFetch(`/targets/${targetId}/chart?days=${selectedTimeframe}`);
       
       console.log('Chart data received:', chartData);
+      console.log(`📊 Sampling info:`, chartData?.sampling_info);
       
       // Verify we have data
       if (!chartData || !chartData.data || chartData.data.length === 0) {
         throw new Error('No chart data available');
       }
       
-      console.log(`✅ Loaded ${chartData.data.length} data points for ${chartData.target?.name}`);
+      console.log(`✅ Loaded ${chartData.data.length} data points for ${chartData.target?.name} (${chartData.sampling_info?.granularity})`);
       
       // Render chart immediately - canvas should be available
       renderChart(chartData);
@@ -211,13 +239,13 @@
     }
   }
 
-  // Remove the waitForCanvas function since canvas is always available
-
   async function changeTimeframe(newTimeframe) {
     if (selectedTimeframe === newTimeframe) return;
     
-    console.log(`Changing timeframe from ${selectedTimeframe} to ${newTimeframe}`);
+    console.log(`Changing timeframe from ${selectedTimeframe} to ${newTimeframe} days`);
     selectedTimeframe = newTimeframe;
+    
+    // Simply reload chart with new timeframe - backend handles the rest
     await loadChart();
   }
 
@@ -234,18 +262,39 @@
         return;
       }
 
-      console.log(`📊 Rendering chart with ${data.data.length} data points`);
+      console.log(`📊 Rendering chart with ${data.data.length} intelligently sampled data points`);
+      console.log(`🎯 Granularity: ${data.sampling_info?.granularity}, Total available: ${data.sampling_info?.total_points_available}`);
 
       const ctx = chartCanvas.getContext('2d');
       
       const labels = data.data.map(point => {
         const date = new Date(point.timestamp);
-        if (selectedTimeframe <= 30) {
-          return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit' });
+        const samplingInfo = data.sampling_info;
+        
+        // Dynamic label formatting based on granularity
+        if (samplingInfo?.granularity?.includes('minutes') || selectedTimeframe <= 1) {
+          return date.toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric', 
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+        } else if (samplingInfo?.granularity?.includes('hour') || selectedTimeframe <= 7) {
+          return date.toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric', 
+            hour: '2-digit' 
+          });
         } else if (selectedTimeframe <= 365) {
-          return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          return date.toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric' 
+          });
         } else {
-          return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short' });
+          return date.toLocaleDateString('en-US', { 
+            year: 'numeric', 
+            month: 'short' 
+          });
         }
       });
 
@@ -255,6 +304,9 @@
       const gradient = ctx.createLinearGradient(0, 0, 0, 400);
       gradient.addColorStop(0, 'rgba(59, 130, 246, 0.3)');
       gradient.addColorStop(1, 'rgba(59, 130, 246, 0.05)');
+
+      // Adjust point size based on number of points
+      const pointRadius = data.data.length <= 50 ? 4 : data.data.length <= 100 ? 3 : 2;
 
       chart = new Chart(ctx, {
         type: 'line',
@@ -268,8 +320,8 @@
               backgroundColor: gradient,
               borderWidth: 2,
               tension: 0.4,
-              pointRadius: selectedTimeframe <= 30 ? 3 : selectedTimeframe <= 365 ? 2 : 1,
-              pointHoverRadius: 6,
+              pointRadius: pointRadius,
+              pointHoverRadius: pointRadius + 2,
               pointBackgroundColor: 'rgb(59, 130, 246)',
               pointBorderColor: '#ffffff',
               pointBorderWidth: 2,
@@ -283,7 +335,7 @@
           plugins: {
             title: {
               display: true,
-              text: `${data.target.name} - Attention Trends`,
+              text: `${data.target.name} - Attention Trends (${data.sampling_info?.granularity || 'optimized sampling'})`,
               color: '#F8FAFC',
               font: {
                 size: 16,
@@ -291,13 +343,14 @@
               }
             },
             legend: {
-              display: false // Single dataset, no need for legend
+              display: false
             }
           },
           scales: {
             x: {
               ticks: {
-                color: '#CBD5E1'
+                color: '#CBD5E1',
+                maxTicksLimit: Math.min(12, Math.max(6, Math.floor(data.data.length / 5)))
               },
               grid: {
                 color: 'rgba(255, 255, 255, 0.1)'
@@ -327,7 +380,7 @@
 
       // Update summary stats after rendering
       updateSummaryStats();
-      console.log('✅ Chart rendered successfully');
+      console.log('✅ Chart rendered successfully with intelligent sampling');
   }
 
   function destroyChart() {
@@ -413,7 +466,15 @@
       <div class="flex items-center justify-between text-xs text-gray-500">
         <div>
           Showing {getSelectedTimeframeName()} of Google Trends data
-          {#if chartData?.data?.length}
+          {#if chartData?.sampling_info}
+            <span class="ml-2 px-2 py-1 bg-gray-800 rounded text-gray-300">
+              {chartData.sampling_info.points_returned} points
+              {#if chartData.sampling_info.total_points_available > chartData.sampling_info.points_returned}
+                (sampled from {chartData.sampling_info.total_points_available})
+              {/if}
+              • {chartData.sampling_info.granularity}
+            </span>
+          {:else if chartData?.data?.length}
             ({chartData.data.length} data points)
           {/if}
         </div>
@@ -422,7 +483,7 @@
           <svg class="w-3 h-3 text-green-400" fill="currentColor" viewBox="0 0 20 20">
             <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
           </svg>
-          <span>Real Google Trends Data</span>
+          <span>Intelligently Sampled Data</span>
         </div>
       </div>
     </div>

@@ -223,54 +223,6 @@ class GoogleTrendsService:
             
         except Exception as e:
             logger.error(f"Error getting attention score for {search_term}: {e}")
-            # Return fallback data
-            return self._generate_mock_trends_data(search_term)
-    
-    def _generate_mock_trends_data(self, search_term: str) -> dict:
-        """Generate realistic mock trends data for fallback"""
-        
-        # Base attention scores for different types
-        base_scores = {
-            # Politicians - higher volatility
-            "donald trump": random.uniform(60, 95),
-            "joe biden": random.uniform(40, 80), 
-            "kamala harris": random.uniform(25, 60),
-            "ron desantis": random.uniform(20, 55),
-            
-            # Billionaires - medium volatility
-            "elon musk": random.uniform(70, 90),
-            "jeff bezos": random.uniform(15, 45),
-            "bill gates": random.uniform(20, 50),
-            "warren buffett": random.uniform(10, 35),
-            
-            # Countries - lower volatility
-            "united states": random.uniform(30, 70),
-            "china": random.uniform(25, 60),
-            "japan": random.uniform(15, 40),
-            "united kingdom": random.uniform(20, 45),
-            
-            # Stocks/Crypto - high volatility
-            "tesla": random.uniform(40, 85),
-            "gamestop": random.uniform(20, 70),
-            "bitcoin": random.uniform(50, 90),
-            "artificial intelligence": random.uniform(45, 80)
-        }
-        
-        # Get base score or use random for unknown terms
-        search_lower = search_term.lower().replace(" news", "").replace(" stock", "")
-        base_score = base_scores.get(search_lower, random.uniform(20, 60))
-        
-        # Add some randomness
-        attention_score = max(0, min(100, base_score + random.uniform(-10, 10)))
-        
-        return {
-            'success': True,
-            'attention_score': attention_score,
-            'timeline': [attention_score] * 10,  # Mock timeline
-            'search_term': search_term,
-            'source': 'fallback_mock',
-            'timestamp': datetime.utcnow().isoformat()
-        }
     
     async def _get_trends_data(self, search_term: str, timeframe: str, geo: str) -> Dict:
         """Get trends data from Google API"""
