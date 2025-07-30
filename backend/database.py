@@ -1,5 +1,6 @@
+# backend/database.py
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import sessionmaker
 import os
 from dotenv import load_dotenv
 import logging
@@ -15,7 +16,6 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localho
 # SQLAlchemy setup
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
-Base = declarative_base()
 
 # Dependency to get database session
 def get_db():
@@ -29,10 +29,12 @@ def get_db():
 def create_tables():
     """Create all database tables"""
     try:
+        # Import models to make sure they're registered with Base
         from models import (
-            User, AttentionTarget, AttentionHistory, Portfolio, 
+            Base, User, AttentionTarget, AttentionHistory, Portfolio, 
             Trade, Tournament, TournamentEntry
         )
+        # Use the Base from models.py, not a local one
         Base.metadata.create_all(bind=engine)
         logger.info("✅ Database tables created successfully")
     except Exception as e:
@@ -42,6 +44,8 @@ def create_tables():
 def drop_tables():
     """Drop all database tables (use with caution!)"""
     try:
+        # Import Base from models
+        from models import Base
         Base.metadata.drop_all(bind=engine)
         logger.info("🗑️ All tables dropped")
     except Exception as e:
@@ -68,7 +72,7 @@ def seed_initial_data():
                     balance=Decimal("10000.00")
                 )
                 db.add(admin_user)
-                print("Admin user created successfully! (username: admin, password: admin123)")
+                logger.info("Admin user created successfully! (username: admin, password: admin123)")
 
             # Create sample tournaments if none exist
             if db.query(Tournament).count() == 0:

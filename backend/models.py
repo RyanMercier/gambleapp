@@ -1,3 +1,4 @@
+# backend/models.py
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, Enum, Text, Numeric
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -24,7 +25,7 @@ class User(Base):
     username = Column(String(50), unique=True, index=True)
     email = Column(String(100), unique=True, index=True)
     password_hash = Column(String(128))
-    balance = Column(Numeric(10, 2), default=1000.00)  # Still needed for tournament entries
+    balance = Column(Numeric(10, 2), default=1000.00)
     created_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
     
@@ -42,7 +43,7 @@ class AttentionTarget(Base):
     search_term = Column(String(200), nullable=False, index=True)
     description = Column(Text)
     
-    # Only attention score - removed share price
+    # ONLY attention score - no share price
     current_attention_score = Column(Numeric(5, 2), nullable=False, default=50.0)
     
     # Metadata
@@ -51,10 +52,10 @@ class AttentionTarget(Base):
     is_active = Column(Boolean, default=True)
     
     # 5-year baseline metadata
-    baseline_period = Column(String(20), default="5_year")  # Track baseline period used
-    baseline_average = Column(Numeric(5, 2))  # Average attention over baseline period
-    baseline_max = Column(Numeric(5, 2))      # Max attention over baseline period
-    baseline_min = Column(Numeric(5, 2))      # Min attention over baseline period
+    baseline_period = Column(String(20), default="5_year")
+    baseline_average = Column(Numeric(5, 2))
+    baseline_max = Column(Numeric(5, 2))
+    baseline_min = Column(Numeric(5, 2))
     
     # Relationships
     history = relationship("AttentionHistory", back_populates="target")
@@ -67,13 +68,13 @@ class AttentionHistory(Base):
     id = Column(Integer, primary_key=True, index=True)
     target_id = Column(Integer, ForeignKey("attention_targets.id"), nullable=False)
     
-    # Only attention score - removed share_price
+    # ONLY attention score - no share price
     attention_score = Column(Numeric(5, 2), nullable=False)
     
     # Additional context fields
-    data_source = Column(String(50), default="google_trends")  # Track data source
-    timeframe_used = Column(String(20), default="5_year")      # Track timeframe for this data point
-    confidence_score = Column(Numeric(3, 2))  # Optional confidence in the data
+    data_source = Column(String(50), default="google_trends")
+    timeframe_used = Column(String(20), default="5_year")
+    confidence_score = Column(Numeric(3, 2))
     
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     
@@ -82,8 +83,7 @@ class AttentionHistory(Base):
 
 class Portfolio(Base):
     """
-    Modified to track attention 'shares' instead of stock-like shares
-    These represent stakes in attention outcomes rather than traditional shares
+    Attention-based portfolio tracking (no traditional shares)
     """
     __tablename__ = "portfolios"
     
@@ -91,7 +91,7 @@ class Portfolio(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     target_id = Column(Integer, ForeignKey("attention_targets.id"), nullable=False)
     
-    # Attention stakes - how much the user has "invested" in this target's attention
+    # Attention-based tracking
     attention_stakes = Column(Numeric(10, 2), nullable=False, default=0.0)
     average_entry_score = Column(Numeric(5, 2))  # Average attention score when invested
     
@@ -104,7 +104,7 @@ class Portfolio(Base):
 
 class Trade(Base):
     """
-    Modified to track attention betting/staking instead of traditional trading
+    Attention betting/staking instead of traditional trading
     """
     __tablename__ = "trades"
     
@@ -166,68 +166,11 @@ class TournamentEntry(Base):
     joined_at = Column(DateTime, default=datetime.utcnow)
     
     # Performance tracking
-    starting_score = Column(Numeric(10, 2), default=0.0)  # Base score at tournament start
-    final_score = Column(Numeric(10, 2), default=0.0)     # Final score at tournament end
-    rank = Column(Integer)  # Final ranking in tournament
+    starting_score = Column(Numeric(10, 2), default=0.0)
+    final_score = Column(Numeric(10, 2), default=0.0)
+    rank = Column(Integer)
     prize_won = Column(Numeric(10, 2), default=0.0)
     
     # Relationships
     user = relationship("User", back_populates="tournament_entries")
     tournament = relationship("Tournament", back_populates="entries")
-
-# New table for tracking attention trends and patterns
-class AttentionTrend(Base):
-    """
-    Track broader attention trends and patterns for analytics
-    """
-    __tablename__ = "attention_trends"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    target_id = Column(Integer, ForeignKey("attention_targets.id"), nullable=False)
-    
-    # Trend analysis
-    period = Column(String(20), nullable=False)  # 'daily', 'weekly', 'monthly'
-    trend_direction = Column(String(20))  # 'increasing', 'decreasing', 'stable', 'volatile'
-    volatility_score = Column(Numeric(5, 2))  # How volatile the attention has been
-    momentum_score = Column(Numeric(5, 2))    # Trend momentum strength
-    
-    # Period boundaries
-    period_start = Column(DateTime, nullable=False)
-    period_end = Column(DateTime, nullable=False)
-    
-    # Statistics for the period
-    avg_attention = Column(Numeric(5, 2))
-    max_attention = Column(Numeric(5, 2))
-    min_attention = Column(Numeric(5, 2))
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationship
-    target = relationship("AttentionTarget")
-
-# Analytics view for leaderboards and statistics
-class UserStats(Base):
-    """
-    Materialized view or computed statistics for user performance
-    """
-    __tablename__ = "user_stats"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    
-    # Performance metrics
-    total_stakes = Column(Numeric(12, 2), default=0.0)
-    successful_predictions = Column(Integer, default=0)
-    total_predictions = Column(Integer, default=0)
-    accuracy_rate = Column(Numeric(5, 2), default=0.0)  # Percentage
-    
-    # Rankings
-    global_rank = Column(Integer)
-    monthly_rank = Column(Integer)
-    
-    # Time periods
-    last_updated = Column(DateTime, default=datetime.utcnow)
-    month_year = Column(String(7))  # Format: "2025-07"
-    
-    # Relationship
-    user = relationship("User")
