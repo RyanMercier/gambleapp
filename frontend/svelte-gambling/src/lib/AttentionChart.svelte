@@ -42,6 +42,12 @@
     }
   });
 
+  // Reactive statement to render chart when both canvas and data are ready
+  $: if (chartCanvas && chartData && chartData.data && chartData.data.length > 0) {
+    console.log('📊 Reactive render: Canvas and data both ready');
+    renderChart(chartData);
+  }
+
   onDestroy(() => {
     destroyChart();
     disconnectWebSocket();
@@ -191,11 +197,9 @@
         throw new Error('No chart data available');
       }
       
-      // Verify we have real Google Trends data
-      if (chartData.timeframe?.data_source !== 'google_trends_api') {
-        console.warn('⚠️ Not receiving real Google Trends data');
-      }
+      console.log(`✅ Loaded ${chartData.data.length} data points for ${chartData.target?.name}`);
       
+      // Render chart immediately - canvas should be available
       renderChart(chartData);
     } catch (err) {
       error = err.message;
@@ -204,6 +208,8 @@
       loading = false;
     }
   }
+
+  // Remove the waitForCanvas function since canvas is always available
 
   async function changeTimeframe(newTimeframe) {
     if (selectedTimeframe === newTimeframe) return;
@@ -216,12 +222,17 @@
   function renderChart(data) {
       destroyChart();
 
-      if (!chartCanvas || !data.data.length) {
-        console.error('Cannot render chart: missing canvas or data');
+      if (!chartCanvas) {
+        console.error('Cannot render chart: canvas element not available');
         return;
       }
 
-      console.log(`Rendering chart with ${data.data.length} data points`);
+      if (!data || !data.data || data.data.length === 0) {
+        console.error('Cannot render chart: no data available', data);
+        return;
+      }
+
+      console.log(`📊 Rendering chart with ${data.data.length} data points`);
 
       const ctx = chartCanvas.getContext('2d');
       
@@ -314,6 +325,7 @@
 
       // Update summary stats after rendering
       updateSummaryStats();
+      console.log('✅ Chart rendered successfully');
   }
 
   function destroyChart() {
@@ -418,15 +430,22 @@
 
   <!-- Chart Container -->
   <div class="relative bg-gray-900 rounded-lg p-4 shadow-lg border border-gray-800" style="height: {height}">
+    <!-- Always render canvas -->
+    <canvas bind:this={chartCanvas} class="w-full h-full"></canvas>
+    
+    <!-- Loading overlay -->
     {#if loading}
-      <div class="absolute inset-0 flex items-center justify-center">
+      <div class="absolute inset-0 flex items-center justify-center bg-gray-900/90">
         <div class="flex flex-col items-center gap-3">
           <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
           <span class="text-gray-400 text-sm">Loading chart for target {targetId}...</span>
         </div>
       </div>
-    {:else if error}
-      <div class="absolute inset-0 flex items-center justify-center">
+    {/if}
+    
+    <!-- Error overlay -->
+    {#if error}
+      <div class="absolute inset-0 flex items-center justify-center bg-gray-900/90">
         <div class="text-center">
           <div class="text-red-400 mb-2">
             <svg class="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -443,16 +462,17 @@
           </button>
         </div>
       </div>
-    {:else if !chartData?.data?.length}
-      <div class="absolute inset-0 flex items-center justify-center text-gray-400">
-        <div class="text-center">
+    {/if}
+    
+    <!-- No data overlay -->
+    {#if !loading && !error && (!chartData?.data?.length)}
+      <div class="absolute inset-0 flex items-center justify-center bg-gray-900/90">
+        <div class="text-center text-gray-400">
           <div class="text-4xl mb-2">📊</div>
           <div>No Google Trends data available</div>
           <div class="text-sm mt-1">Data is being collected for target {targetId}...</div>
         </div>
       </div>
-    {:else}
-      <canvas bind:this={chartCanvas} class="w-full h-full"></canvas>
     {/if}
   </div>
 </div>
