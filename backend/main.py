@@ -232,7 +232,7 @@ async def search_attention_target(
                 "billionaire": TargetType.BILLIONAIRE,
                 "stock": TargetType.STOCK,
                 "country": TargetType.COUNTRY,
-                "meme": TargetType.MEME_STOCK
+                "stock": TargetType.STOCK
             }
             
             # Create the target

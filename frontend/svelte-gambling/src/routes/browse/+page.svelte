@@ -217,7 +217,7 @@
               targetName={chartTargetName}
               height="400px"
               showTimeframeSelector={true}
-              autoUpdate={false}
+              autoUpdate={true}
             />
           </div>
         {:else}

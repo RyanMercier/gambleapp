@@ -49,6 +49,11 @@
     renderChart(chartData);
   }
 
+  $: if (targetId) {
+    console.log('Target ID changed to:', targetId);
+    loadChart();
+  }
+
   onDestroy(() => {
     destroyChart();
     disconnectWebSocket();
@@ -135,6 +140,11 @@
         
         // Update summary statistics
         updateSummaryStats();
+
+        // FIX: Force chart refresh - add this line to ensure the chart actually updates
+        if (chart) {
+          chart.update('none'); // Force immediate chart update without animation
+        }
       }
     }
   }
