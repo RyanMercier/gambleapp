@@ -931,15 +931,24 @@ async def websocket_target_endpoint(websocket: WebSocket, target_id: int):
 
 # Background task startup - FIXED IMPORTS
 async def start_background_tasks():
-    """Start background tasks for real-time data updates"""
+    """Start background tasks for real-time data updates with WebSocket support"""
     try:
-        # Import the correct function names
+        # FIX: Import the correct function and pass websocket manager
         from background_updater import start_background_updates
-        asyncio.create_task(start_background_updates())
-        logger.info("✅ Background data updates started")
+        
+        # Pass the WebSocket manager to enable real-time updates
+        asyncio.create_task(start_background_updates(websocket_manager=manager))
+        logger.info("✅ Background data updates started with WebSocket support")
         
     except ImportError as e:
         logger.error(f"❌ Failed to import background_updater: {e}")
+        # Fallback to service method with WebSocket manager
+        try:
+            from google_trends_service import run_background_updates
+            asyncio.create_task(run_background_updates(websocket_manager=manager))
+            logger.info("✅ Fallback background data updates started with WebSocket support")
+        except ImportError:
+            logger.error("❌ No background update system available")
 
 @app.on_event("startup")
 async def startup_event():

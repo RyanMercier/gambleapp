@@ -1,5 +1,7 @@
+# backend/background_updater.py - Fixed circular import issue
+
 """
-Complete Background Updater - Matches main.py expectations
+Complete Background Updater - Fixed circular import by accepting websocket_manager as parameter
 """
 
 import asyncio
@@ -16,17 +18,25 @@ _updater_status = {
     "last_update": None,
     "cycle_count": 0,
     "errors": 0,
-    "targets_updated": 0
+    "targets_updated": 0,
+    "websocket_enabled": False
 }
 
-async def start_background_updates():
-    """Start background updates - function name that main.py expects"""
+# FIX: Accept websocket_manager as parameter to avoid circular imports
+async def start_background_updates(websocket_manager=None):
+    """Start background updates with WebSocket support - function name that main.py expects"""
     global _updater_status
     
     _updater_status["running"] = True
+    _updater_status["websocket_enabled"] = websocket_manager is not None
     update_count = 0
     
     logger.info("🚀 Starting background real-time updates...")
+    
+    if websocket_manager:
+        logger.info("✅ WebSocket manager provided - real-time chart updates enabled")
+    else:
+        logger.warning("⚠️ No WebSocket manager provided - updates will be database-only")
     
     while _updater_status["running"]:
         try:
@@ -35,11 +45,15 @@ async def start_background_updates():
             
             logger.info(f"🔄 Starting update cycle #{update_count}")
             
-            async with GoogleTrendsService() as service:
+            # FIX: Pass WebSocket manager to GoogleTrendsService constructor
+            async with GoogleTrendsService(websocket_manager=websocket_manager) as service:
                 await service.update_all_targets()
             
             _updater_status["last_update"] = datetime.utcnow()
             logger.info(f"✅ Cycle #{update_count} completed successfully")
+            
+            if websocket_manager:
+                logger.info("📡 Real-time WebSocket notifications sent to connected clients")
             
             # Wait 5 minutes before next update
             logger.info("⏰ Waiting 5 minutes until next update...")
@@ -51,9 +65,9 @@ async def start_background_updates():
             logger.info("⏰ Waiting 5 minutes before retry...")
             await asyncio.sleep(300)
 
-async def run_background_updates():
+async def run_background_updates(websocket_manager=None):
     """Alternative function name for compatibility"""
-    await start_background_updates()
+    await start_background_updates(websocket_manager)
 
 def stop_background_updates():
     """Stop the background updater"""
@@ -68,12 +82,13 @@ def get_updater_status():
         "last_update": _updater_status["last_update"].isoformat() if _updater_status["last_update"] else None,
         "cycle_count": _updater_status["cycle_count"],
         "error_count": _updater_status["errors"],
-        "targets_updated": _updater_status["targets_updated"]
+        "targets_updated": _updater_status["targets_updated"],
+        "websocket_enabled": _updater_status["websocket_enabled"]
     }
 
-# Single target update function for testing
-async def update_single_target(target_name: str):
-    """Update a single target by name - useful for testing"""
+# Single target update function for testing with WebSocket notifications
+async def update_single_target(target_name: str, websocket_manager=None):
+    """Update a single target by name with WebSocket notification - useful for testing"""
     try:
         from database import SessionLocal
         from models import AttentionTarget
@@ -87,10 +102,15 @@ async def update_single_target(target_name: str):
             logger.error(f"❌ Target '{target_name}' not found")
             return False
         
-        async with GoogleTrendsService() as service:
+        # FIX: Pass WebSocket manager to service constructor
+        async with GoogleTrendsService(websocket_manager=websocket_manager) as service:
             success = await service.update_target_data(target, db)
             
         db.close()
+        
+        if success and websocket_manager:
+            logger.info(f"📡 Real-time update sent for {target_name}")
+        
         return success
         
     except Exception as e:
@@ -98,5 +118,5 @@ async def update_single_target(target_name: str):
         return False
 
 if __name__ == "__main__":
-    # Can be run directly for testing
+    # Can be run directly for testing (without WebSocket manager)
     asyncio.run(start_background_updates())

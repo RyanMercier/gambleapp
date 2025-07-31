@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class GoogleTrendsService:
     """Google Trends API service with proper timestamp handling"""
     
-    def __init__(self):
+    def __init__(self, websocket_manager=None):
         self.session = None
         self.session_created_at = None
         self.last_request_time = 0
@@ -41,6 +41,8 @@ class GoogleTrendsService:
         
         # Widget storage
         self.timeline_widget = None
+
+        self.websocket_manager = websocket_manager
         
     async def __aenter__(self):
         await self._create_session()
@@ -285,6 +287,24 @@ class GoogleTrendsService:
             logger.info(f"✅ {target.name}: {old_score:.1f} → {new_score:.1f} ({change:+.1f}) at {current_utc}")
             if deleted > 0:
                 logger.info(f"🗑️ Cleaned up {deleted} old real-time points")
+
+            # FIX: Send WebSocket notification for real-time chart updates
+            if self.websocket_manager:
+                try:
+                    await self.websocket_manager.send_target_update(target.id, {
+                        "type": "attention_update",
+                        "target_id": target.id,
+                        "attention_score": float(new_score),
+                        "timestamp": current_utc.isoformat(),
+                        "change": float(change),
+                        "target_name": target.name
+                    })
+                    logger.info(f"📡 Sent WebSocket update for {target.name}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to send WebSocket update for {target.name}: {e}")
+            else:
+                logger.debug(f"⚠️ No WebSocket manager - skipping real-time notification for {target.name}")
+            
             
             return True
             
@@ -318,7 +338,7 @@ class GoogleTrendsService:
 
 
 # Background updater function for compatibility
-async def run_background_updates():
+async def run_background_updates(websocket_manager=None):
     """Run background updates every 5 minutes"""
     cycle = 0
     
@@ -327,7 +347,8 @@ async def run_background_updates():
             cycle += 1
             logger.info(f"🔄 Starting update cycle #{cycle}")
             
-            async with GoogleTrendsService() as service:
+            # FIX: Pass WebSocket manager to service
+            async with GoogleTrendsService(websocket_manager=websocket_manager) as service:
                 await service.update_all_targets()
             
             logger.info(f"✅ Cycle #{cycle} complete")
