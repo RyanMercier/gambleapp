@@ -29,34 +29,37 @@ SAMPLE_TARGETS = [
     {"name": "United States", "type": "country", "search_term": "united states"},
 ]
 
-async def create_target_with_smart_data(target_data: dict, service: GoogleTrendsService, db: SessionLocal) -> bool:
-    """Create a single target with optimized historical data storage"""
+async def create_target_with_real_data(target_data: dict, service: GoogleTrendsService, db: SessionLocal) -> bool:
+    """Create target with REAL Google Trends data - 5 years + 1 day"""
     try:
         name = target_data["name"]
         search_term = target_data["search_term"]
         target_type = target_data["type"]
         
         # Check if target already exists
-        existing = db.query(AttentionTarget).filter(
-            AttentionTarget.name == name
-        ).first()
-        
+        existing = db.query(AttentionTarget).filter(AttentionTarget.name == name).first()
         if existing:
             logger.info(f"✅ Target {name} already exists, skipping")
             return False
         
-        # Get 5 years of historical data (SINGLE API CALL)
-        logger.info(f"📊 Getting 5 years of REAL Google Trends data for: {name}")
-        trends_data = await service.get_google_trends_data(search_term, timeframe="today 5-y")
+        logger.info(f"📊 Getting REAL Google Trends data for: {name}")
         
-        if not trends_data or not trends_data.get('timeline'):
-            logger.warning(f"⚠️ No real Google Trends data available for {name}")
+        # 1. Get 5 years of data (gives us ~260 weekly data points)
+        logger.info(f"📅 Getting 5 years of data for {name}...")
+        long_term_data = await service.get_google_trends_data(search_term, timeframe="today 5-y")
+        
+        # 2. Get 1 day of data (gives us ~24 hourly data points)  
+        logger.info(f"⏰ Getting 1 day of data for {name}...")
+        short_term_data = await service.get_google_trends_data(search_term, timeframe="now 1-d")
+        
+        if not long_term_data or not long_term_data.get('timeline'):
+            logger.warning(f"⚠️ No long-term data for {name}")
             return False
         
-        # Use the latest score as current score (no duplicate API call)
-        current_score = trends_data.get("attention_score", 50.0)
+        # Use latest score from short-term data if available, otherwise long-term
+        current_score = short_term_data.get("attention_score", long_term_data.get("attention_score", 50.0))
         
-        # Map string type to enum
+        # Create the target
         type_mapping = {
             "politician": TargetType.POLITICIAN,
             "billionaire": TargetType.BILLIONAIRE,
@@ -64,7 +67,6 @@ async def create_target_with_smart_data(target_data: dict, service: GoogleTrends
             "stock": TargetType.STOCK
         }
         
-        # Create the target
         target = AttentionTarget(
             name=name,
             type=type_mapping[target_type],
@@ -79,8 +81,11 @@ async def create_target_with_smart_data(target_data: dict, service: GoogleTrends
         
         logger.info(f"✅ Created target: {name} (Current Score: {current_score:.1f})")
         
-        # Create optimized historical data (no duplicate API call)
-        await create_smart_historical_data(target, trends_data, db)
+        # Store the actual Google Trends data with proper timestamps
+        await store_trends_data(target, long_term_data, "5_year", db)
+        
+        if short_term_data and short_term_data.get('timeline'):
+            await store_trends_data(target, short_term_data, "1_day", db)
         
         return True
         
@@ -89,117 +94,71 @@ async def create_target_with_smart_data(target_data: dict, service: GoogleTrends
         db.rollback()
         return False
 
-async def create_smart_historical_data(target: AttentionTarget, trends_data: dict, db: SessionLocal):
-    """
-    Create historical data at SPECIFIC timestamp intervals for proper chart sampling
-    """
+
+async def store_trends_data(target: AttentionTarget, trends_data: dict, data_type: str, db: SessionLocal):
+    """Store Google Trends data using ACTUAL timestamps from Google"""
     try:
         timeline_values = trends_data.get('timeline', [])
+        timeline_timestamps = trends_data.get('timeline_timestamps', [])
+        
         if not timeline_values:
-            logger.warning(f"⚠️ No timeline data for {target.name}")
+            logger.warning(f"⚠️ No timeline data for {target.name} ({data_type})")
             return
         
-        logger.info(f"📊 Creating timestamp-based historical data for {target.name}")
-        
-        # Use the real trends data as our base pattern
-        base_score = sum(timeline_values) / len(timeline_values)
         historical_entries = []
         
-        end_time = datetime.utcnow()
+        # DEBUG: Log what we're getting from Google
+        logger.info(f"🔍 {target.name} ({data_type}): {len(timeline_values)} values, {len(timeline_timestamps)} timestamps")
         
-        # Create data at SPECIFIC intervals that match our chart requirements
-        
-        # 1. LAST 24 HOURS: Every 15 minutes (96 points)
-        start_24h = end_time - timedelta(hours=24)
-        current_time = start_24h.replace(minute=(start_24h.minute // 15) * 15, second=0, microsecond=0)  # Round to 15-min boundary
-        
-        value_index = 0
-        while current_time <= end_time and value_index < len(timeline_values):
-            score = timeline_values[value_index % len(timeline_values)]  # Cycle through real data
+        # ALWAYS use Google's actual timestamps if available
+        if timeline_timestamps and len(timeline_timestamps) == len(timeline_values):
+            logger.info(f"✅ Using REAL Google timestamps for {target.name} ({data_type})")
             
-            historical_entries.append({
-                'timestamp': current_time,
-                'attention_score': score,
-                'data_source': 'google_trends_15min',
-                'interval': '15_minutes'
-            })
+            for i, (timestamp, value) in enumerate(zip(timeline_timestamps, timeline_values)):
+                try:
+                    # Parse Google's timestamp format
+                    parsed_timestamp = parse_google_timestamp(timestamp)
+                    
+                    # DEBUG: Log first few timestamps to see format
+                    if i < 3:
+                        logger.info(f"🕐 Sample timestamp {i}: {timestamp} -> {parsed_timestamp}")
+                    
+                    historical_entries.append({
+                        'timestamp': parsed_timestamp,
+                        'attention_score': float(value),
+                        'data_source': f'google_trends_{data_type}_real_timestamps',
+                        'timeframe_used': trends_data.get('timeframe', 'unknown'),
+                        'original_timestamp': str(timestamp)  # Keep original for debugging
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to parse timestamp {timestamp}: {e}")
+                    continue
+        else:
+            logger.warning(f"⚠️ No real timestamps available for {target.name} ({data_type}), creating fallback")
+            # Fallback: create reasonable timestamps
+            end_time = datetime.utcnow()
             
-            current_time += timedelta(minutes=15)
-            value_index += 1
-        
-        # 2. LAST 7 DAYS (excluding last 24h): Every hour (144 points)
-        start_7d = end_time - timedelta(days=7)
-        end_7d = end_time - timedelta(hours=24)
-        current_time = start_7d.replace(minute=0, second=0, microsecond=0)  # Round to hour boundary
-        
-        while current_time <= end_7d and value_index < len(timeline_values):
-            score = timeline_values[value_index % len(timeline_values)]
+            if data_type == "1_day":
+                start_time = end_time - timedelta(days=1)
+                # Spread the points evenly over 24 hours
+                interval = timedelta(days=1) / len(timeline_values)
+            else:  # 5_year
+                start_time = end_time - timedelta(days=5*365)
+                # Spread the points evenly over 5 years
+                interval = timedelta(days=5*365) / len(timeline_values)
             
-            historical_entries.append({
-                'timestamp': current_time,
-                'attention_score': score,
-                'data_source': 'google_trends_hourly',
-                'interval': '1_hour'
-            })
-            
-            current_time += timedelta(hours=1)
-            value_index += 1
+            current_time = start_time
+            for value in timeline_values:
+                historical_entries.append({
+                    'timestamp': current_time,
+                    'attention_score': float(value),
+                    'data_source': f'google_trends_{data_type}_fallback_timestamps',
+                    'timeframe_used': trends_data.get('timeframe', 'unknown')
+                })
+                current_time += interval
         
-        # 3. LAST 30 DAYS (excluding last 7 days): Every 8 hours (69 points)
-        start_30d = end_time - timedelta(days=30)
-        end_30d = end_time - timedelta(days=7)
-        current_time = start_30d.replace(hour=(start_30d.hour // 8) * 8, minute=0, second=0, microsecond=0)
-        
-        while current_time <= end_30d and value_index < len(timeline_values):
-            score = timeline_values[value_index % len(timeline_values)]
-            
-            historical_entries.append({
-                'timestamp': current_time,
-                'attention_score': score,
-                'data_source': 'google_trends_8hourly',
-                'interval': '8_hours'
-            })
-            
-            current_time += timedelta(hours=8)
-            value_index += 1
-        
-        # 4. LAST YEAR (excluding last 30 days): Every 5 days (67 points)
-        start_1y = end_time - timedelta(days=365)
-        end_1y = end_time - timedelta(days=30)
-        current_time = start_1y.replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        while current_time <= end_1y and value_index < len(timeline_values):
-            score = timeline_values[value_index % len(timeline_values)]
-            
-            historical_entries.append({
-                'timestamp': current_time,
-                'attention_score': score,
-                'data_source': 'google_trends_5daily',
-                'interval': '5_days'
-            })
-            
-            current_time += timedelta(days=5)
-            value_index += 1
-        
-        # 5. OLDER THAN 1 YEAR: Every week
-        start_5y = end_time - timedelta(days=5*365)
-        end_5y = end_time - timedelta(days=365)
-        current_time = start_5y.replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        while current_time <= end_5y and value_index < len(timeline_values):
-            score = timeline_values[value_index % len(timeline_values)]
-            
-            historical_entries.append({
-                'timestamp': current_time,
-                'attention_score': score,
-                'data_source': 'google_trends_weekly',
-                'interval': '1_week'
-            })
-            
-            current_time += timedelta(weeks=1)
-            value_index += 1
-        
-        # Batch insert all entries
+        # Insert into database
         db_entries = []
         for entry in historical_entries:
             db_entry = AttentionHistory(
@@ -207,53 +166,76 @@ async def create_smart_historical_data(target: AttentionTarget, trends_data: dic
                 attention_score=Decimal(str(entry['attention_score'])),
                 timestamp=entry['timestamp'],
                 data_source=entry['data_source'],
-                timeframe_used="historical_seeded",
-                confidence_score=Decimal("0.8")  # Seeded data = good confidence
+                timeframe_used=entry['timeframe_used'],
+                confidence_score=Decimal("1.0")  # Real Google Trends data
             )
             db_entries.append(db_entry)
         
-        # Insert in batches for better performance
+        # Batch insert
         batch_size = 1000
         for i in range(0, len(db_entries), batch_size):
             batch = db_entries[i:i+batch_size]
             db.add_all(batch)
             db.commit()
         
-        logger.info(f"✅ Created {len(historical_entries)} timestamp-aligned data points for {target.name}")
+        # DEBUG: Show timestamp range
+        if historical_entries:
+            first_ts = historical_entries[0]['timestamp']
+            last_ts = historical_entries[-1]['timestamp']
+            logger.info(f"✅ Stored {len(historical_entries)} {data_type} points for {target.name}")
+            logger.info(f"📅 Timestamp range: {first_ts} to {last_ts}")
         
     except Exception as e:
-        logger.error(f"❌ Error creating historical data for {target.name}: {e}")
+        logger.error(f"❌ Error storing {data_type} data for {target.name}: {e}")
         db.rollback()
 
-def find_closest_data_point(data_points: list, target_time: datetime) -> dict:
-    """Find the closest real data point to a target timestamp"""
-    if not data_points:
-        return None
-    
-    # Simple closest point finder
-    closest = min(data_points, key=lambda x: abs((x['timestamp'] - target_time).total_seconds()))
-    return closest
 
-def parse_trends_timestamp(trends_time) -> datetime:
-    """Parse Google Trends timestamp format to datetime"""
+def parse_google_timestamp(timestamp) -> datetime:
+    """Parse Google Trends timestamp - handles multiple formats"""
     try:
-        if isinstance(trends_time, (int, float)):
-            return datetime.fromtimestamp(trends_time)
-        elif isinstance(trends_time, str):
-            if '-' in trends_time:
+        # Google Trends can return different timestamp formats
+        if isinstance(timestamp, (int, float)):
+            # Unix timestamp (seconds)
+            if timestamp > 1e10:  # If it's milliseconds
+                timestamp = timestamp / 1000
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=None)
+        
+        elif isinstance(timestamp, str):
+            # Try different string formats
+            if timestamp.isdigit():
+                # String number - treat as unix timestamp
+                ts = float(timestamp)
+                if ts > 1e10:  # milliseconds
+                    ts = ts / 1000
+                return datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
+            
+            elif '-' in timestamp:
+                # Date format like "2024-07-30" or "2024-07-30T12:00:00"
                 try:
-                    return datetime.strptime(trends_time, "%Y-%m-%d")
+                    if 'T' in timestamp:
+                        return datetime.fromisoformat(timestamp.replace('Z', ''))
+                    else:
+                        return datetime.strptime(timestamp[:10], "%Y-%m-%d")
                 except:
-                    return datetime.strptime(trends_time[:10], "%Y-%m-%d")
-            else:
-                return datetime.fromtimestamp(float(trends_time))
+                    return datetime.strptime(timestamp[:10], "%Y-%m-%d")
+        
+        elif hasattr(timestamp, 'timestamp'):
+            # datetime object
+            return timestamp
+        
+        else:
+            logger.warning(f"Unknown timestamp format: {type(timestamp)} {timestamp}")
+            return datetime.utcnow() - timedelta(days=1)
+    
     except Exception as e:
-        logger.warning(f"Could not parse timestamp {trends_time}: {e}")
-        return datetime.utcnow() - timedelta(days=365)
+        logger.error(f"Failed to parse timestamp {timestamp}: {e}")
+        return datetime.utcnow() - timedelta(days=1)
 
+
+# Update the main seeding function to use the new approach
 async def seed_sample_targets():
-    """Seed database with sample targets using optimized REAL Google Trends data"""
-    logger.info("🚀 Seeding sample targets with SMART Google Trends data storage...")
+    """Seed database with sample targets using REAL Google Trends data"""
+    logger.info("🚀 Seeding targets with REAL Google Trends data (5 years + 1 day)...")
     
     db = SessionLocal()
     created_count = 0
@@ -264,7 +246,7 @@ async def seed_sample_targets():
                 try:
                     logger.info(f"📈 [{i+1}/{len(SAMPLE_TARGETS)}] Processing: {target_data['name']}")
                     
-                    success = await create_target_with_smart_data(target_data, service, db)
+                    success = await create_target_with_real_data(target_data, service, db)
                     if success:
                         created_count += 1
                     
@@ -274,61 +256,16 @@ async def seed_sample_targets():
                         await asyncio.sleep(8)
                         
                 except Exception as e:
-                    logger.error(f"❌ Error creating target {target_data['name']}: {e}")
+                    logger.error(f"❌ Error processing {target_data['name']}: {e}")
                     continue
         
-        logger.info(f"✅ SMART data seeding completed: {created_count}/{len(SAMPLE_TARGETS)} targets created")
+        logger.info(f"🎉 Successfully created {created_count} targets with REAL Google Trends data")
         
     except Exception as e:
         logger.error(f"❌ Seeding failed: {e}")
-        
     finally:
         db.close()
 
-async def verify_smart_data():
-    """Verify that all targets have smart historical data"""
-    db = SessionLocal()
-    try:
-        targets = db.query(AttentionTarget).all()
-        logger.info(f"\n📊 SMART Data Verification:")
-        logger.info(f"Total targets: {len(targets)}")
-        
-        for target in targets:
-            # Count by data source
-            five_min = db.query(AttentionHistory).filter(
-                AttentionHistory.target_id == target.id,
-                AttentionHistory.data_source == "google_trends_5min_filled"
-            ).count()
-            
-            hourly = db.query(AttentionHistory).filter(
-                AttentionHistory.target_id == target.id,
-                AttentionHistory.data_source == "google_trends_hourly_filled"
-            ).count()
-            
-            daily = db.query(AttentionHistory).filter(
-                AttentionHistory.target_id == target.id,
-                AttentionHistory.data_source == "google_trends_daily_filled"
-            ).count()
-            
-            total = five_min + hourly + daily
-            
-            logger.info(f"  📈 {target.name}:")
-            logger.info(f"    5-min (24h): {five_min}")
-            logger.info(f"    Hourly (30d): {hourly}")
-            logger.info(f"    Daily (5y): {daily}")
-            logger.info(f"    Total: {total} (vs 525,601 with old method!)")
-            logger.info(f"    Current Score: {float(target.current_attention_score):.1f}%")
-            
-    finally:
-        db.close()
 
 if __name__ == "__main__":
-    async def main():
-        # Seed with smart Google Trends data
-        await seed_sample_targets()
-        
-        # Verify the smart data
-        await verify_smart_data()
-    
-    # Run the seeding process
-    asyncio.run(main())
+    asyncio.run(seed_sample_targets())

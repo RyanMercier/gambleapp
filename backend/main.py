@@ -279,7 +279,7 @@ def get_target_detail(target_id: int, db: Session = Depends(get_db)):
 
 @app.get("/targets/{target_id}/chart")
 def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(get_db)):
-    """Get chart data with proper timestamp-based sampling"""
+    """Get chart data - use the actual data we have stored"""
     
     target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
     if not target:
@@ -288,33 +288,56 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
     end_time = datetime.utcnow()
     start_time = end_time - timedelta(days=days)
     
-    # Generate the exact timestamps we want based on timeframe
-    target_timestamps = generate_target_timestamps(start_time, end_time, days)
+    # Get ALL data in the timeframe, ordered by timestamp
+    all_data = db.query(AttentionHistory).filter(
+        AttentionHistory.target_id == target_id,
+        AttentionHistory.timestamp >= start_time,
+        AttentionHistory.timestamp <= end_time
+    ).order_by(AttentionHistory.timestamp.asc()).all()
     
-    # Get data points closest to our target timestamps
-    sampled_data = []
+    if not all_data:
+        logger.warning(f"No data found for target {target_id} in timeframe {days} days")
+        return {
+            "target": {
+                "id": target.id,
+                "name": target.name,
+                "current_attention_score": float(target.current_attention_score)
+            },
+            "data": [],
+            "data_count": 0,
+            "date_range": {
+                "start": start_time.isoformat(),
+                "end": end_time.isoformat(),
+                "days": days
+            }
+        }
     
-    for target_ts in target_timestamps:
-        # Find the closest data point to this timestamp
-        closest_point = db.query(AttentionHistory).filter(
-            AttentionHistory.target_id == target_id,
-            AttentionHistory.timestamp <= target_ts + timedelta(minutes=30),  # Look within 30 min window
-            AttentionHistory.timestamp >= target_ts - timedelta(minutes=30)
-        ).order_by(
-            func.abs(func.extract('epoch', AttentionHistory.timestamp - target_ts))
-        ).first()
+    # Convert to list format
+    data_points = [
+        {
+            "timestamp": point.timestamp.isoformat(),
+            "attention_score": float(point.attention_score),
+            "data_source": point.data_source
+        }
+        for point in all_data
+    ]
+    
+    # Only sample if we have too many points (>200)
+    if len(data_points) > 200:
+        # Keep every Nth point to get around 100-150 points
+        step = len(data_points) // 120
+        sampled_indices = list(range(0, len(data_points), step))
         
-        if closest_point:
-            sampled_data.append({
-                "timestamp": target_ts,  # Use target timestamp for consistent spacing
-                "attention_score": float(closest_point.attention_score),
-                "data_source": closest_point.data_source,
-                "actual_timestamp": closest_point.timestamp  # Keep actual for debugging
-            })
+        # Always include the last point
+        if sampled_indices[-1] != len(data_points) - 1:
+            sampled_indices.append(len(data_points) - 1)
+        
+        data_points = [data_points[i] for i in sampled_indices]
+        sampling_applied = True
+    else:
+        sampling_applied = False
     
-    granularity_info = get_granularity_info(days)
-    
-    logger.info(f"📊 Chart for target {target_id} ({days} days): {len(sampled_data)} points at {granularity_info['interval']} intervals")
+    logger.info(f"📊 Chart for target {target_id} ({days} days): {len(all_data)} → {len(data_points)} points")
     
     return {
         "target": {
@@ -322,78 +345,57 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
             "name": target.name,
             "current_attention_score": float(target.current_attention_score)
         },
-        "data": [
-            {
-                "attention_score": point["attention_score"],
-                "timestamp": point["timestamp"].isoformat(),
-                "data_source": point["data_source"]
-            }
-            for point in sampled_data
-        ],
-        "data_count": len(sampled_data),
+        "data": data_points,
+        "data_count": len(data_points),
         "date_range": {
             "start": start_time.isoformat(),
             "end": end_time.isoformat(),
             "days": days
         },
         "sampling_info": {
-            "points_returned": len(sampled_data),
-            "granularity": granularity_info["name"],
-            "interval": granularity_info["interval"]
+            "total_available": len(all_data),
+            "points_returned": len(data_points),
+            "sampling_applied": sampling_applied,
+            "granularity": f"actual_data_{days}d"
         }
     }
 
 
-def generate_target_timestamps(start_time: datetime, end_time: datetime, days: int) -> list:
-    """Generate evenly spaced target timestamps based on timeframe"""
+def sample_data_for_chart(data_points: list, days: int) -> list:
+    """Sample data points for optimal chart display based on timeframe"""
     
-    timestamps = []
+    if not data_points:
+        return []
     
+    # If we have few points, return all
+    if len(data_points) <= 100:
+        return data_points
+    
+    # Determine target number of points based on timeframe
     if days <= 1:
-        # 1 day: Every 15 minutes
-        interval = timedelta(minutes=15)
-        granularity = "15_minutes"
+        target_points = 96  # Every 15 minutes
     elif days <= 7:
-        # 1 week: Every hour
-        interval = timedelta(hours=1)
-        granularity = "1_hour"
+        target_points = 168  # Every hour
     elif days <= 30:
-        # 1 month: Every 8 hours
-        interval = timedelta(hours=8)
-        granularity = "8_hours"
+        target_points = 120  # Every 6 hours
     elif days <= 365:
-        # 1 year: Every 5 days
-        interval = timedelta(days=5)
-        granularity = "5_days"
+        target_points = 73   # Every 5 days
     else:
-        # 5+ years: Every week
-        interval = timedelta(weeks=1)
-        granularity = "1_week"
+        target_points = 52   # Every week
     
-    current_time = start_time
-    while current_time <= end_time:
-        timestamps.append(current_time)
-        current_time += interval
+    # If we have fewer points than target, return all
+    if len(data_points) <= target_points:
+        return data_points
     
-    # Always include end time if it's not already included
-    if not timestamps or timestamps[-1] < end_time:
-        timestamps.append(end_time)
+    # Sample evenly across the timeframe
+    step = len(data_points) / target_points
+    sampled_indices = [int(i * step) for i in range(target_points)]
     
-    return timestamps
-
-
-def get_granularity_info(days: int) -> dict:
-    """Get granularity information for given timeframe"""
-    if days <= 1:
-        return {"name": "15_minutes", "interval": "15 minutes"}
-    elif days <= 7:
-        return {"name": "1_hour", "interval": "1 hour"}
-    elif days <= 30:
-        return {"name": "8_hours", "interval": "8 hours"}
-    elif days <= 365:
-        return {"name": "5_days", "interval": "5 days"}
-    else:
-        return {"name": "1_week", "interval": "1 week"}
+    # Always include the last point
+    if sampled_indices[-1] != len(data_points) - 1:
+        sampled_indices.append(len(data_points) - 1)
+    
+    return [data_points[i] for i in sampled_indices]
 
 # Trading endpoints
 @app.post("/trade")

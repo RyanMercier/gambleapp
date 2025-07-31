@@ -234,6 +234,8 @@ class GoogleTrendsService:
         
         # Step 2: Get interest over time data
         result = await self._get_interest_over_time()
+
+        logger.info(f"📈 Interest over time data for {search_term}: {result}")
         
         if result and result.get('success'):
             # Add metadata
@@ -421,85 +423,6 @@ class GoogleTrendsService:
         
         self.last_request_time = time.time()
 
-    def _parse_trends_timestamp(self, trends_time) -> datetime:
-        """Parse Google Trends timestamp format to datetime"""
-        try:
-            # Google Trends returns different timestamp formats
-            if isinstance(trends_time, (int, float)):
-                # Unix timestamp
-                return datetime.fromtimestamp(trends_time)
-            elif isinstance(trends_time, str):
-                if '-' in trends_time:
-                    # Date format like "2024-01-15"
-                    try:
-                        return datetime.strptime(trends_time, "%Y-%m-%d")
-                    except:
-                        return datetime.strptime(trends_time[:10], "%Y-%m-%d")
-                else:
-                    # String timestamp
-                    return datetime.fromtimestamp(float(trends_time))
-        except Exception as e:
-            logger.warning(f"Could not parse timestamp {trends_time}: {e}")
-            # Return a reasonable fallback
-            return datetime.utcnow() - timedelta(days=365)
-
-    def _forward_fill_to_5_minute_intervals(self, real_data_points: list) -> list:
-        """
-        Forward fill real Google Trends data to 5-minute intervals
-        Takes sparse real data and creates dense 5-minute intervals using closest real values
-        """
-        if not real_data_points:
-            return []
-        
-        # Sort by timestamp
-        sorted_data = sorted(real_data_points, key=lambda x: x['timestamp'])
-        
-        # Find the time range (last 5 years to now)
-        end_time = datetime.utcnow()
-        start_time = end_time - timedelta(days=5*365)  # 5 years ago
-        
-        # Generate 5-minute intervals and forward fill
-        forward_filled = []
-        current_time = start_time
-        current_data_index = 0
-        
-        logger.info(f"🔄 Forward filling {len(sorted_data)} real points to 5-minute intervals")
-        
-        # Find first data point that's >= start_time
-        while (current_data_index < len(sorted_data) and 
-               sorted_data[current_data_index]['timestamp'] < start_time):
-            current_data_index += 1
-        
-        if current_data_index >= len(sorted_data):
-            # If no data points in range, use the last available data point
-            if sorted_data:
-                current_data_index = len(sorted_data) - 1
-            else:
-                logger.warning("No real data points available")
-                return []
-        
-        while current_time <= end_time:
-            # Find the most recent real data point for this timestamp
-            while (current_data_index < len(sorted_data) - 1 and 
-                   sorted_data[current_data_index + 1]['timestamp'] <= current_time):
-                current_data_index += 1
-            
-            # Use the current real data point for this 5-minute interval
-            if current_data_index < len(sorted_data):
-                real_point = sorted_data[current_data_index]
-                
-                forward_filled.append({
-                    'timestamp': current_time,
-                    'attention_score': real_point['attention_score'],
-                    'source_timestamp': real_point['timestamp']  # Track original data point
-                })
-            
-            # Move to next 5-minute interval
-            current_time += timedelta(minutes=5)
-        
-        logger.info(f"✅ Forward filled {len(real_data_points)} real points to {len(forward_filled)} 5-minute intervals")
-        return forward_filled
-
     async def update_target_data(self, target: AttentionTarget, db: Session) -> bool:
         """Update a single target's attention data with REAL Google Trends only"""
         try:
@@ -515,7 +438,7 @@ class GoogleTrendsService:
             history_entry = AttentionHistory(
                 target_id=target.id,
                 attention_score=Decimal(str(new_score)),
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(datetime.timezone.utc),
                 data_source="google_trends_real_time",
                 timeframe_used="now",
                 confidence_score=Decimal("1.0")  # Real data = high confidence
