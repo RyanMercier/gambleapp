@@ -279,21 +279,88 @@ def get_target_detail(target_id: int, db: Session = Depends(get_db)):
 
 @app.get("/targets/{target_id}/chart")
 def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(get_db)):
-    """Get chart data - use the actual data we have stored"""
+    """Get chart data using appropriate timeframe + recent real-time data"""
     
     target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
     
+    # Map requested days to the appropriate data source
+    timeframe_mapping = {
+        1: "1_day",
+        7: "7_days", 
+        30: "30_days",
+        90: "90_days",
+        180: "1_year",
+        365: "1_year",
+        1825: "5_years"
+    }
+    
+    # Find the best matching timeframe
+    best_timeframe = None
+    for day_threshold in sorted(timeframe_mapping.keys()):
+        if days <= day_threshold:
+            best_timeframe = timeframe_mapping[day_threshold]
+            break
+    
+    if not best_timeframe:
+        best_timeframe = "5_years"
+    
+    logger.info(f"📊 Chart request: {days} days -> using {best_timeframe} data")
+    
     end_time = datetime.utcnow()
     start_time = end_time - timedelta(days=days)
     
-    # Get ALL data in the timeframe, ordered by timestamp
-    all_data = db.query(AttentionHistory).filter(
+    # Get data from the specific timeframe source
+    base_data = db.query(AttentionHistory).filter(
         AttentionHistory.target_id == target_id,
+        AttentionHistory.data_source.like(f'%{best_timeframe}%'),
         AttentionHistory.timestamp >= start_time,
         AttentionHistory.timestamp <= end_time
     ).order_by(AttentionHistory.timestamp.asc()).all()
+    
+    # For short timeframes (1-7 days), also get recent real-time data
+    realtime_data = []
+    if days <= 7:
+        # Get real-time data from the last few hours to show live updates
+        realtime_cutoff = end_time - timedelta(hours=6)
+        realtime_data = db.query(AttentionHistory).filter(
+            AttentionHistory.target_id == target_id,
+            AttentionHistory.data_source == "google_trends_real_time",
+            AttentionHistory.timestamp >= realtime_cutoff,
+            AttentionHistory.timestamp <= end_time
+        ).order_by(AttentionHistory.timestamp.asc()).all()
+        
+        logger.info(f"📊 Including {len(realtime_data)} recent real-time points")
+    
+    # Combine data sources
+    all_data = list(base_data) + list(realtime_data)
+    
+    # Remove duplicates by timestamp (prefer real-time data if timestamps are close)
+    if all_data:
+        # Sort by timestamp
+        all_data.sort(key=lambda x: x.timestamp)
+        
+        # Remove duplicates within 5 minutes of each other (prefer real-time)
+        deduplicated_data = []
+        for point in all_data:
+            # Check if we already have a point within 5 minutes
+            is_duplicate = False
+            for existing_point in deduplicated_data:
+                time_diff = abs((point.timestamp - existing_point.timestamp).total_seconds())
+                if time_diff < 300:  # 5 minutes
+                    # If this is real-time data and existing isn't, replace it
+                    if "real_time" in point.data_source and "real_time" not in existing_point.data_source:
+                        deduplicated_data.remove(existing_point)
+                        deduplicated_data.append(point)
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                deduplicated_data.append(point)
+        
+        all_data = deduplicated_data
+        all_data.sort(key=lambda x: x.timestamp)
     
     if not all_data:
         logger.warning(f"No data found for target {target_id} in timeframe {days} days")
@@ -309,10 +376,14 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
                 "start": start_time.isoformat(),
                 "end": end_time.isoformat(),
                 "days": days
+            },
+            "scale_info": {
+                "requested_timeframe": best_timeframe,
+                "data_sources": "none"
             }
         }
     
-    # Convert to list format
+    # Convert to response format
     data_points = [
         {
             "timestamp": point.timestamp.isoformat(),
@@ -322,22 +393,21 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
         for point in all_data
     ]
     
-    # Only sample if we have too many points (>200)
+    # Light sampling if too many points
     if len(data_points) > 200:
-        # Keep every Nth point to get around 100-150 points
-        step = len(data_points) // 120
+        step = len(data_points) // 150
         sampled_indices = list(range(0, len(data_points), step))
-        
-        # Always include the last point
         if sampled_indices[-1] != len(data_points) - 1:
             sampled_indices.append(len(data_points) - 1)
-        
         data_points = [data_points[i] for i in sampled_indices]
         sampling_applied = True
     else:
         sampling_applied = False
     
-    logger.info(f"📊 Chart for target {target_id} ({days} days): {len(all_data)} → {len(data_points)} points")
+    # Get the data sources used
+    data_sources_used = list(set(point.data_source for point in all_data))
+    
+    logger.info(f"📊 Chart for target {target_id} ({days} days): {len(all_data)} → {len(data_points)} points from {data_sources_used}")
     
     return {
         "target": {
@@ -352,14 +422,17 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
             "end": end_time.isoformat(),
             "days": days
         },
-        "sampling_info": {
-            "total_available": len(all_data),
+        "scale_info": {
+            "requested_timeframe": best_timeframe,
+            "data_sources": data_sources_used,
+            "base_data_points": len(base_data),
+            "realtime_data_points": len(realtime_data),
+            "total_points": len(all_data),
             "points_returned": len(data_points),
             "sampling_applied": sampling_applied,
-            "granularity": f"actual_data_{days}d"
+            "scale_note": f"Primary scale: {best_timeframe}, includes recent real-time updates"
         }
     }
-
 
 def sample_data_for_chart(data_points: list, days: int) -> list:
     """Sample data points for optimal chart display based on timeframe"""

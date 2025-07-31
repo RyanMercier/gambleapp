@@ -105,60 +105,52 @@ async def store_trends_data(target: AttentionTarget, trends_data: dict, data_typ
             logger.warning(f"⚠️ No timeline data for {target.name} ({data_type})")
             return
         
-        historical_entries = []
-        
-        # DEBUG: Log what we're getting from Google
         logger.info(f"🔍 {target.name} ({data_type}): {len(timeline_values)} values, {len(timeline_timestamps)} timestamps")
         
-        # ALWAYS use Google's actual timestamps if available
+        historical_entries = []
+        
+        # Check if we have timestamps
         if timeline_timestamps and len(timeline_timestamps) == len(timeline_values):
             logger.info(f"✅ Using REAL Google timestamps for {target.name} ({data_type})")
             
-            for i, (timestamp, value) in enumerate(zip(timeline_timestamps, timeline_values)):
+            for i, (ts_str, value) in enumerate(zip(timeline_timestamps, timeline_values)):
                 try:
-                    # Parse Google's timestamp format
-                    parsed_timestamp = parse_google_timestamp(timestamp)
+                    # Google returns Unix timestamps as strings
+                    timestamp_float = float(ts_str)
+                    parsed_timestamp = datetime.fromtimestamp(timestamp_float, tz=timezone.utc).replace(tzinfo=None)
                     
-                    # DEBUG: Log first few timestamps to see format
+                    # Log first few to verify
                     if i < 3:
-                        logger.info(f"🕐 Sample timestamp {i}: {timestamp} -> {parsed_timestamp}")
+                        logger.info(f"🕐 Sample {i}: {ts_str} -> {parsed_timestamp}")
                     
                     historical_entries.append({
                         'timestamp': parsed_timestamp,
                         'attention_score': float(value),
-                        'data_source': f'google_trends_{data_type}_real_timestamps',
-                        'timeframe_used': trends_data.get('timeframe', 'unknown'),
-                        'original_timestamp': str(timestamp)  # Keep original for debugging
+                        'data_source': f'google_trends_{data_type}_real_ts',
+                        'timeframe_used': trends_data.get('timeframe', 'unknown')
                     })
                     
                 except Exception as e:
-                    logger.error(f"❌ Failed to parse timestamp {timestamp}: {e}")
+                    logger.error(f"❌ Failed to parse timestamp {ts_str}: {e}")
                     continue
+        
+        elif timeline_timestamps and len(timeline_timestamps) != len(timeline_values):
+            logger.warning(f"⚠️ Timestamp/value count mismatch for {target.name}: {len(timeline_timestamps)} vs {len(timeline_values)}")
+            # Fall back to creating timestamps
+            historical_entries = create_fallback_timestamps(timeline_values, data_type, trends_data)
+        
         else:
-            logger.warning(f"⚠️ No real timestamps available for {target.name} ({data_type}), creating fallback")
-            # Fallback: create reasonable timestamps
-            end_time = datetime.utcnow()
-            
-            if data_type == "1_day":
-                start_time = end_time - timedelta(days=1)
-                # Spread the points evenly over 24 hours
-                interval = timedelta(days=1) / len(timeline_values)
-            else:  # 5_year
-                start_time = end_time - timedelta(days=5*365)
-                # Spread the points evenly over 5 years
-                interval = timedelta(days=5*365) / len(timeline_values)
-            
-            current_time = start_time
-            for value in timeline_values:
-                historical_entries.append({
-                    'timestamp': current_time,
-                    'attention_score': float(value),
-                    'data_source': f'google_trends_{data_type}_fallback_timestamps',
-                    'timeframe_used': trends_data.get('timeframe', 'unknown')
-                })
-                current_time += interval
+            logger.warning(f"⚠️ No timestamps available for {target.name} ({data_type})")
+            # Fall back to creating timestamps
+            historical_entries = create_fallback_timestamps(timeline_values, data_type, trends_data)
+        
+        if not historical_entries:
+            logger.error(f"❌ No entries created for {target.name} ({data_type})")
+            return
         
         # Insert into database
+        logger.info(f"💾 Inserting {len(historical_entries)} entries for {target.name} ({data_type})")
+        
         db_entries = []
         for entry in historical_entries:
             db_entry = AttentionHistory(
@@ -167,7 +159,7 @@ async def store_trends_data(target: AttentionTarget, trends_data: dict, data_typ
                 timestamp=entry['timestamp'],
                 data_source=entry['data_source'],
                 timeframe_used=entry['timeframe_used'],
-                confidence_score=Decimal("1.0")  # Real Google Trends data
+                confidence_score=Decimal("1.0")
             )
             db_entries.append(db_entry)
         
@@ -178,59 +170,44 @@ async def store_trends_data(target: AttentionTarget, trends_data: dict, data_typ
             db.add_all(batch)
             db.commit()
         
-        # DEBUG: Show timestamp range
-        if historical_entries:
-            first_ts = historical_entries[0]['timestamp']
-            last_ts = historical_entries[-1]['timestamp']
-            logger.info(f"✅ Stored {len(historical_entries)} {data_type} points for {target.name}")
-            logger.info(f"📅 Timestamp range: {first_ts} to {last_ts}")
+        # Verify what was stored
+        first_ts = historical_entries[0]['timestamp']
+        last_ts = historical_entries[-1]['timestamp']
+        logger.info(f"✅ Stored {len(historical_entries)} {data_type} points for {target.name}")
+        logger.info(f"📅 Range: {first_ts} to {last_ts}")
         
     except Exception as e:
         logger.error(f"❌ Error storing {data_type} data for {target.name}: {e}")
         db.rollback()
 
 
-def parse_google_timestamp(timestamp) -> datetime:
-    """Parse Google Trends timestamp - handles multiple formats"""
-    try:
-        # Google Trends can return different timestamp formats
-        if isinstance(timestamp, (int, float)):
-            # Unix timestamp (seconds)
-            if timestamp > 1e10:  # If it's milliseconds
-                timestamp = timestamp / 1000
-            return datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=None)
-        
-        elif isinstance(timestamp, str):
-            # Try different string formats
-            if timestamp.isdigit():
-                # String number - treat as unix timestamp
-                ts = float(timestamp)
-                if ts > 1e10:  # milliseconds
-                    ts = ts / 1000
-                return datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
-            
-            elif '-' in timestamp:
-                # Date format like "2024-07-30" or "2024-07-30T12:00:00"
-                try:
-                    if 'T' in timestamp:
-                        return datetime.fromisoformat(timestamp.replace('Z', ''))
-                    else:
-                        return datetime.strptime(timestamp[:10], "%Y-%m-%d")
-                except:
-                    return datetime.strptime(timestamp[:10], "%Y-%m-%d")
-        
-        elif hasattr(timestamp, 'timestamp'):
-            # datetime object
-            return timestamp
-        
-        else:
-            logger.warning(f"Unknown timestamp format: {type(timestamp)} {timestamp}")
-            return datetime.utcnow() - timedelta(days=1)
+def create_fallback_timestamps(timeline_values: list, data_type: str, trends_data: dict) -> list:
+    """Create reasonable fallback timestamps when Google doesn't provide them"""
+    historical_entries = []
+    end_time = datetime.utcnow()
     
-    except Exception as e:
-        logger.error(f"Failed to parse timestamp {timestamp}: {e}")
-        return datetime.utcnow() - timedelta(days=1)
-
+    if data_type == "1_day":
+        start_time = end_time - timedelta(days=1)
+        logger.info(f"📅 Creating fallback 1-day timestamps: {start_time} to {end_time}")
+    else:  # 5_year
+        start_time = end_time - timedelta(days=5*365)
+        logger.info(f"📅 Creating fallback 5-year timestamps: {start_time} to {end_time}")
+    
+    # Create evenly spaced timestamps
+    total_duration = end_time - start_time
+    interval = total_duration / len(timeline_values)
+    
+    current_time = start_time
+    for value in timeline_values:
+        historical_entries.append({
+            'timestamp': current_time,
+            'attention_score': float(value),
+            'data_source': f'google_trends_{data_type}_fallback_ts',
+            'timeframe_used': trends_data.get('timeframe', 'unknown')
+        })
+        current_time += interval
+    
+    return historical_entries
 
 # Update the main seeding function to use the new approach
 async def seed_sample_targets():

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import AttentionTarget, AttentionHistory, TargetType
 
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -424,32 +425,62 @@ class GoogleTrendsService:
         self.last_request_time = time.time()
 
     async def update_target_data(self, target: AttentionTarget, db: Session) -> bool:
-        """Update a single target's attention data with REAL Google Trends only"""
+        """Update a target with real-time data for multiple timeframes"""
         try:
-            # Get current trends data (REAL ONLY)
-            trends_data = await self.get_google_trends_data(target.search_term)
+            # Get current real-time data using 1-day timeframe for consistency
+            logger.info(f"🔄 Updating {target.name} with real-time data...")
+            trends_data = await self.get_google_trends_data(target.search_term, timeframe="now 1-d")
+            
+            if not trends_data or not trends_data.get('success'):
+                logger.error(f"❌ Failed to get real-time data for {target.name}")
+                return False
+            
             new_score = trends_data["attention_score"]
             
-            # Update target
+            # Update target's current score
             target.current_attention_score = Decimal(str(new_score))
             target.last_updated = datetime.utcnow()
             
-            # Save historical data point with proper source tracking
-            history_entry = AttentionHistory(
-                target_id=target.id,
-                attention_score=Decimal(str(new_score)),
-                timestamp=datetime.now(datetime.timezone.utc),
-                data_source="google_trends_real_time",
-                timeframe_used="now",
-                confidence_score=Decimal("1.0")  # Real data = high confidence
-            )
-            db.add(history_entry)
+            # Store the real-time data point for MULTIPLE data sources
+            # This ensures it shows up in different chart timeframes
+            current_time = datetime.utcnow()
             
-            logger.info(f"✅ Updated {target.name}: {new_score:.1f}% (REAL Google Trends)")
+            data_sources_to_update = [
+                "google_trends_real_time",  # For general real-time tracking
+                "google_trends_1_day",      # For 1-day charts
+                "google_trends_7_days"      # For 7-day charts (recent enough)
+            ]
+            
+            for data_source in data_sources_to_update:
+                history_entry = AttentionHistory(
+                    target_id=target.id,
+                    attention_score=Decimal(str(new_score)),
+                    timestamp=current_time,
+                    data_source=data_source,
+                    timeframe_used="now 1-d",  # Use 1-day timeframe for real-time
+                    confidence_score=Decimal("1.0")
+                )
+                db.add(history_entry)
+            
+            # Clean up old real-time data (keep only last 48 hours of real-time points)
+            cutoff_time = current_time - timedelta(hours=48)
+            old_realtime_data = db.query(AttentionHistory).filter(
+                AttentionHistory.target_id == target.id,
+                AttentionHistory.data_source == "google_trends_real_time",
+                AttentionHistory.timestamp < cutoff_time
+            ).delete()
+            
+            if old_realtime_data > 0:
+                logger.info(f"🗑️ Cleaned up {old_realtime_data} old real-time points for {target.name}")
+            
+            db.commit()
+            
+            logger.info(f"✅ Updated {target.name}: {new_score:.1f}% (stored to {len(data_sources_to_update)} data sources)")
             return True
             
         except Exception as e:
             logger.error(f"❌ Error updating {target.name}: {e}")
+            db.rollback()
             return False
 
     async def update_all_targets(self):
