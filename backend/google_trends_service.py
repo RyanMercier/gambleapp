@@ -1,9 +1,13 @@
+"""
+Complete Google Trends Service - Fixed timestamp handling
+"""
+
 import aiohttp
 import json
 import asyncio
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Dict, List
 from sqlalchemy.orm import Session
@@ -15,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class GoogleTrendsService:
-    """Simple Google Trends API - no fallbacks, no complex caching bullshit"""
+    """Google Trends API service with proper timestamp handling"""
     
     def __init__(self):
         self.session = None
@@ -92,7 +96,7 @@ class GoogleTrendsService:
             logger.warning(f"Cookie request failed: {e}, continuing without cookies")
 
     async def get_google_trends_data(self, search_term: str, timeframe: str = "now 1-d") -> dict:
-        """Get Google Trends data - works or fails, no fallbacks"""
+        """Get Google Trends data with proper timestamp handling"""
         try:
             # Step 1: Get widget token
             if not await self._get_widget_token(search_term, timeframe):
@@ -112,7 +116,7 @@ class GoogleTrendsService:
                 'timestamp': datetime.utcnow().isoformat()
             })
             
-            logger.info(f"✅ Got trend score for {search_term}: {timeline_data['attention_score']}")
+            logger.info(f"✅ Got trend score for {search_term}: {timeline_data['attention_score']:.1f}")
             return timeline_data
             
         except Exception as e:
@@ -186,7 +190,7 @@ class GoogleTrendsService:
                 if not timeline_data:
                     return {"success": False, "error": "No timeline data"}
                 
-                # Parse values and timestamps
+                # Parse values and timestamps with proper timezone handling
                 values = []
                 timestamps = []
                 
@@ -194,7 +198,20 @@ class GoogleTrendsService:
                     if 'value' in entry and entry['value']:
                         values.append(entry['value'][0])
                         if 'time' in entry:
-                            timestamps.append(str(entry['time']))
+                            # Convert Google's timestamp to proper datetime
+                            timestamp_str = str(entry['time'])
+                            try:
+                                # Google returns Unix timestamp as string
+                                timestamp_float = float(timestamp_str)
+                                # Convert to UTC datetime
+                                dt = datetime.fromtimestamp(timestamp_float, tz=timezone.utc)
+                                # Store as UTC but without timezone info for database compatibility
+                                timestamps.append(dt.replace(tzinfo=None))
+                                logger.debug(f"🕐 Parsed timestamp: {timestamp_str} -> {dt}")
+                            except (ValueError, OSError) as e:
+                                logger.error(f"❌ Failed to parse timestamp {timestamp_str}: {e}")
+                                # Use current time as fallback
+                                timestamps.append(datetime.utcnow())
                 
                 if not values:
                     return {"success": False, "error": "No values in timeline"}
@@ -203,7 +220,7 @@ class GoogleTrendsService:
                     'success': True,
                     'attention_score': float(values[-1]),
                     'timeline': values,
-                    'timeline_timestamps': timestamps
+                    'timeline_timestamps': timestamps  # Now datetime objects, not strings
                 }
                 
         except Exception as e:
@@ -221,7 +238,7 @@ class GoogleTrendsService:
         self.last_request_time = time.time()
 
     async def update_target_data(self, target: AttentionTarget, db: Session) -> bool:
-        """Update target with real-time data"""
+        """Update target with real-time data using current timestamp"""
         try:
             logger.info(f"🔄 Updating {target.name}...")
             
@@ -239,11 +256,13 @@ class GoogleTrendsService:
             target.current_attention_score = Decimal(str(new_score))
             target.last_updated = datetime.utcnow()
             
-            # Store real-time data point
+            # Store real-time data point with current UTC time
+            current_utc = datetime.utcnow()
+            
             history_entry = AttentionHistory(
                 target_id=target.id,
                 attention_score=Decimal(str(new_score)),
-                timestamp=datetime.utcnow(),
+                timestamp=current_utc,  # Use current UTC time for real-time updates
                 data_source="google_trends_realtime",
                 timeframe_used="now 1-d",
                 confidence_score=Decimal("1.0")
@@ -251,7 +270,7 @@ class GoogleTrendsService:
             db.add(history_entry)
             
             # Clean up old real-time data (keep 48 hours)
-            cutoff = datetime.utcnow() - timedelta(hours=48)
+            cutoff = current_utc - timedelta(hours=48)
             deleted = db.query(AttentionHistory).filter(
                 AttentionHistory.target_id == target.id,
                 AttentionHistory.data_source == "google_trends_realtime",
@@ -261,9 +280,9 @@ class GoogleTrendsService:
             db.commit()
             
             change = new_score - old_score
-            logger.info(f"✅ {target.name}: {old_score:.1f} → {new_score:.1f} ({change:+.1f})")
+            logger.info(f"✅ {target.name}: {old_score:.1f} → {new_score:.1f} ({change:+.1f}) at {current_utc}")
             if deleted > 0:
-                logger.info(f"🗑️ Cleaned up {deleted} old points")
+                logger.info(f"🗑️ Cleaned up {deleted} old real-time points")
             
             return True
             
@@ -296,7 +315,7 @@ class GoogleTrendsService:
             db.close()
 
 
-# Simple background updater
+# Background updater function for compatibility
 async def run_background_updates():
     """Run background updates every 5 minutes"""
     cycle = 0

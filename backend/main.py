@@ -1,4 +1,3 @@
-# backend/main.py
 from fastapi import FastAPI, Depends, HTTPException, status, Query, BackgroundTasks
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +11,6 @@ from typing import List, Optional, Dict
 import asyncio
 import logging
 import json
-import numpy as np
 
 from database import SessionLocal, engine
 from models import (
@@ -23,8 +21,6 @@ from auth import (
     create_user, authenticate_user, create_access_token, 
     decode_access_token, get_current_user
 )
-
-# DON'T create tables here - let database.py handle it properly
 
 app = FastAPI(title="TrendBet Attention Trading API", version="2.0.0")
 
@@ -37,6 +33,9 @@ app.add_middleware(
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Database dependency
@@ -323,6 +322,8 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
         # Combine and sort
         all_data = list(base_data) + list(realtime_data)
         all_data.sort(key=lambda x: x.timestamp)
+        
+        logger.info(f"📊 Combined data: {len(base_data)} base + {len(realtime_data)} realtime = {len(all_data)} total")
     else:
         all_data = base_data
     
@@ -358,7 +359,7 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
     if len(data_points) > 200:
         step = len(data_points) // 150
         data_points = [data_points[i] for i in range(0, len(data_points), step)]
-        if data_points[-1] != all_data[-1]:
+        if data_points and all_data and data_points[-1]["timestamp"] != all_data[-1].timestamp.isoformat():
             data_points.append({
                 "timestamp": all_data[-1].timestamp.isoformat(),
                 "attention_score": float(all_data[-1].attention_score),
@@ -603,6 +604,62 @@ def get_leaderboard(db: Session = Depends(get_db)):
         for i, user in enumerate(users)
     ]
 
+# Admin endpoints
+@app.get("/admin/cleanup")
+async def cleanup_database(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Admin endpoint to cleanup old data"""
+    try:
+        # Simple cleanup - remove old history entries (keep last 100 per target)
+        targets = db.query(AttentionTarget).all()
+        
+        for target in targets:
+            # Keep only the latest 100 history entries per target
+            old_entries = db.query(AttentionHistory).filter(
+                AttentionHistory.target_id == target.id
+            ).order_by(AttentionHistory.timestamp.desc()).offset(100).all()
+            
+            for entry in old_entries:
+                db.delete(entry)
+        
+        db.commit()
+        logger.info("Database cleanup completed")
+        return {"message": "Database cleanup completed", "status": "success"}
+    except Exception as e:
+        logger.error(f"Cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+
+@app.get("/admin/force-update/{target_id}")
+async def force_update_target(target_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Force update a specific target with fresh Google Trends data"""
+    target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    
+    try:
+        async with GoogleTrendsService() as service:
+            success = await service.update_target_data(target, db)
+        
+        if success:
+            # Send real-time update to connected clients
+            await manager.send_target_update(target_id, {
+                "type": "forced_update",
+                "target_id": target_id,
+                "attention_score": float(target.current_attention_score),
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            
+            return {
+                "message": f"Target {target.name} updated successfully",
+                "attention_score": float(target.current_attention_score),
+                "status": "success"
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Update failed")
+            
+    except Exception as e:
+        logger.error(f"Force update failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Update failed: {str(e)}")
+
 # Health check endpoints
 @app.get("/")
 def read_root():
@@ -615,16 +672,10 @@ def health_check():
 @app.get("/service-status")
 def get_service_status():
     """Get status of various services"""
-    try:
-        from google_trends_service import get_service_status
-        trends_status = get_service_status()
-    except:
-        trends_status = {"status": "unavailable"}
-    
     return {
         "api": {"status": "healthy", "version": "2.0.0"},
         "database": {"status": "connected"},
-        "google_trends": trends_status,
+        "google_trends": {"status": "running", "service": "GoogleTrendsService"},
         "timestamp": datetime.utcnow().isoformat()
     }
 
@@ -658,25 +709,22 @@ async def websocket_target_endpoint(websocket: WebSocket, target_id: int):
     except WebSocketDisconnect:
         manager.disconnect(websocket, target_id)
 
-# Background task startup
+# Background task startup - FIXED IMPORTS
 async def start_background_tasks():
-    """Start optimized background tasks for real-time data updates"""
+    """Start background tasks for real-time data updates"""
     try:
-        from background_updater import start_background_updates, get_updater_status
-        
-        # Start the optimized background data update task
-        # Updates 50 targets every 5 minutes with smart prioritization
+        # Import the correct function names
+        from background_updater import start_background_updates
         asyncio.create_task(start_background_updates())
-        logger.info("✅ Optimized background data updates started (50 targets every 5 minutes)")
+        logger.info("✅ Background data updates started")
         
     except ImportError as e:
-        logger.error(f"❌ Failed to start optimized background tasks: {e}")
-        logger.info("📊 Falling back to basic updates...")
-        
+        logger.error(f"❌ Failed to import background_updater: {e}")
+        # Fallback to service method
         try:
-            from google_trends_service import run_data_updates
-            asyncio.create_task(run_data_updates())
-            logger.info("✅ Basic background data updates started")
+            from google_trends_service import run_background_updates
+            asyncio.create_task(run_background_updates())
+            logger.info("✅ Fallback background data updates started")
         except ImportError:
             logger.error("❌ No background update system available")
 

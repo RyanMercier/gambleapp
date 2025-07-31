@@ -1,3 +1,7 @@
+"""
+Complete seed_data.py - Uses actual Google Trends timestamps
+"""
+
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -21,7 +25,7 @@ SAMPLE_TARGETS = [
 ]
 
 async def create_target_with_data(target_data: dict, service: GoogleTrendsService, db: SessionLocal) -> bool:
-    """Create target with multiple timeframe data"""
+    """Create target with multiple timeframe data using real Google timestamps"""
     try:
         name = target_data["name"]
         search_term = target_data["search_term"]
@@ -62,7 +66,7 @@ async def create_target_with_data(target_data: dict, service: GoogleTrendsServic
         
         logger.info(f"✅ Created target: {name} (Score: {current_score:.1f})")
         
-        # Standard Google Trends timeframes
+        # Standard Google Trends timeframes with proper data source names
         timeframes = [
             ("now 1-d", "1d"),
             ("now 7-d", "7d"), 
@@ -72,14 +76,14 @@ async def create_target_with_data(target_data: dict, service: GoogleTrendsServic
             ("today 5-y", "5y")
         ]
         
-        # Get data for each timeframe
+        # Get data for each timeframe using real timestamps
         for timeframe_code, timeframe_name in timeframes:
             try:
                 logger.info(f"📅 Getting {timeframe_name} data for {name}...")
                 data = await service.get_google_trends_data(search_term, timeframe=timeframe_code)
                 
                 if data and data.get('success') and data.get('timeline'):
-                    await store_timeframe_data(target, data, timeframe_name, timeframe_code, db)
+                    await store_timeframe_data_with_real_timestamps(target, data, timeframe_name, timeframe_code, db)
                 else:
                     logger.error(f"❌ No {timeframe_name} data for {name}")
                 
@@ -97,8 +101,8 @@ async def create_target_with_data(target_data: dict, service: GoogleTrendsServic
         return False
 
 
-async def store_timeframe_data(target: AttentionTarget, data: dict, timeframe_name: str, timeframe_code: str, db: SessionLocal):
-    """Store data for a timeframe - no fallbacks, just works or logs error"""
+async def store_timeframe_data_with_real_timestamps(target: AttentionTarget, data: dict, timeframe_name: str, timeframe_code: str, db: SessionLocal):
+    """Store data using actual Google Trends timestamps"""
     try:
         timeline_values = data.get('timeline', [])
         timeline_timestamps = data.get('timeline_timestamps', [])
@@ -107,32 +111,40 @@ async def store_timeframe_data(target: AttentionTarget, data: dict, timeframe_na
             logger.error(f"❌ No timeline values for {target.name} ({timeframe_name})")
             return
         
+        # Check if we have real timestamps (should be datetime objects now)
         if not timeline_timestamps or len(timeline_timestamps) != len(timeline_values):
             logger.error(f"❌ No timestamps or count mismatch for {target.name} ({timeframe_name}): {len(timeline_timestamps)} vs {len(timeline_values)}")
             return
         
-        logger.info(f"💾 Storing {timeframe_name}: {len(timeline_values)} points for {target.name}")
+        logger.info(f"💾 Storing {timeframe_name}: {len(timeline_values)} points with real timestamps for {target.name}")
         
-        # Parse and store data
         entries = []
-        for ts_str, value in zip(timeline_timestamps, timeline_values):
+        stored_count = 0
+        
+        for i, (timestamp_dt, value) in enumerate(zip(timeline_timestamps, timeline_values)):
             try:
-                # Parse Unix timestamp
-                timestamp_float = float(ts_str)
-                parsed_timestamp = datetime.fromtimestamp(timestamp_float, tz=timezone.utc).replace(tzinfo=None)
+                # timestamp_dt should already be a datetime object from the service
+                if not isinstance(timestamp_dt, datetime):
+                    logger.error(f"❌ Expected datetime object, got {type(timestamp_dt)}: {timestamp_dt}")
+                    continue
+                
+                # Log first few timestamps for debugging
+                if i < 3:
+                    logger.info(f"🕐 Sample timestamp {i}: {timestamp_dt}")
                 
                 entry = AttentionHistory(
                     target_id=target.id,
                     attention_score=Decimal(str(value)),
-                    timestamp=parsed_timestamp,
+                    timestamp=timestamp_dt,  # Use real Google timestamp
                     data_source=f"google_trends_{timeframe_name}",
                     timeframe_used=timeframe_code,
                     confidence_score=Decimal("1.0")
                 )
                 entries.append(entry)
+                stored_count += 1
                 
             except Exception as e:
-                logger.error(f"❌ Failed to parse timestamp {ts_str}: {e}")
+                logger.error(f"❌ Failed to process timestamp {timestamp_dt}: {e}")
         
         if not entries:
             logger.error(f"❌ No valid entries created for {target.name} ({timeframe_name})")
@@ -145,9 +157,20 @@ async def store_timeframe_data(target: AttentionTarget, data: dict, timeframe_na
             db.add_all(batch)
             db.commit()
         
+        # Show timestamp range for verification
         first_ts = entries[0].timestamp
         last_ts = entries[-1].timestamp
-        logger.info(f"✅ Stored {len(entries)} {timeframe_name} points: {first_ts} to {last_ts}")
+        logger.info(f"✅ Stored {stored_count} {timeframe_name} points: {first_ts} to {last_ts}")
+        
+        # Verify current time
+        current_utc = datetime.utcnow()
+        logger.info(f"🕐 Current UTC time: {current_utc}")
+        logger.info(f"🕐 Last data timestamp: {last_ts}")
+        
+        # Check if last timestamp is in future (indicates timezone issue)
+        if last_ts > current_utc:
+            time_diff = (last_ts - current_utc).total_seconds() / 3600
+            logger.warning(f"⚠️ Last timestamp is {time_diff:.1f} hours in the future - possible timezone issue")
         
     except Exception as e:
         logger.error(f"❌ Error storing {timeframe_name} data for {target.name}: {e}")
@@ -155,8 +178,8 @@ async def store_timeframe_data(target: AttentionTarget, data: dict, timeframe_na
 
 
 async def seed_sample_targets():
-    """Seed database with sample targets"""
-    logger.info("🚀 Seeding targets with standard Google Trends timeframes...")
+    """Seed database with sample targets using real Google timestamps"""
+    logger.info("🚀 Seeding targets with real Google Trends timestamps...")
     
     db = SessionLocal()
     created_count = 0
@@ -179,7 +202,21 @@ async def seed_sample_targets():
                 except Exception as e:
                     logger.error(f"❌ Error processing {target_data['name']}: {e}")
         
-        logger.info(f"🎉 Successfully created {created_count} targets")
+        logger.info(f"🎉 Successfully created {created_count} targets with real timestamps")
+        
+        # Verify timestamp ranges
+        logger.info("🔍 Verifying timestamp ranges...")
+        targets = db.query(AttentionTarget).all()
+        current_utc = datetime.utcnow()
+        
+        for target in targets[:2]:  # Check first 2
+            latest_point = db.query(AttentionHistory).filter(
+                AttentionHistory.target_id == target.id
+            ).order_by(AttentionHistory.timestamp.desc()).first()
+            
+            if latest_point:
+                time_diff = (latest_point.timestamp - current_utc).total_seconds() / 3600
+                logger.info(f"📊 {target.name}: Latest timestamp {latest_point.timestamp} ({time_diff:+.1f}h from now)")
         
     except Exception as e:
         logger.error(f"❌ Seeding failed: {e}")
