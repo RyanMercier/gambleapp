@@ -204,7 +204,7 @@ async def search_attention_target(
     
     try:
         # Create new target with Google Trends data
-        async with GoogleTrendsService() as service:
+        async with GoogleTrendsService(websocket_manager=manager) as service:
             logger.info(f"🔍 Creating new target for: {query}")
             
             # FIX: Only get current score initially - don't seed all timeframes immediately
@@ -319,7 +319,7 @@ async def gradual_historical_seeding(target_id: int, search_term: str, start_del
         
         seeded_count = 1  # Already have 1d data
         
-        async with GoogleTrendsService() as service:
+        async with GoogleTrendsService(websocket_manager=manager) as service:
             for timeframe_code, timeframe_name, delay_minutes in timeframes_with_delays:
                 try:
                     # Wait before each request
@@ -380,7 +380,7 @@ async def seed_historical_data_for_target(target_id: int, search_term: str):
             
         logger.info(f"📊 Starting historical data seeding for {target.name}")
         
-        async with GoogleTrendsService() as service:
+        async with GoogleTrendsService(websocket_manager=manager) as service:
             # Standard Google Trends timeframes
             timeframes = [
                 ("now 1-d", "1d"),
@@ -856,7 +856,7 @@ async def force_update_target(target_id: int, current_user: User = Depends(get_c
         raise HTTPException(status_code=404, detail="Target not found")
     
     try:
-        async with GoogleTrendsService() as service:
+        async with GoogleTrendsService(websocket_manager=manager) as service:
             success = await service.update_target_data(target, db)
         
         if success:

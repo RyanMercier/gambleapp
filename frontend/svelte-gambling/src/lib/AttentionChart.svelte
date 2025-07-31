@@ -63,7 +63,8 @@
     if (!targetId || websocket) return;
     
     try {
-      const wsUrl = `ws://localhost:8000/ws/targets/${targetId}`;
+      // const wsUrl = `ws://localhost:8000/ws/targets/${targetId}`;
+      const wsUrl = `ws://localhost:8000/ws/${targetId}`;
       websocket = new WebSocket(wsUrl);
       
       websocket.onopen = () => {
