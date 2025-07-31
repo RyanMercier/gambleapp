@@ -11,6 +11,7 @@ from typing import List, Optional, Dict
 import asyncio
 import logging
 import json
+from seed_data import store_timeframe_data_with_real_timestamps
 
 from database import SessionLocal, engine
 from models import (
@@ -167,77 +168,262 @@ def get_me(current_user: User = Depends(get_current_user)):
     }
 
 # Search and Target Management
+# backend/main.py - Conservative search endpoint and seeding to prevent 429 errors
+
 @app.post("/search")
-async def search_and_create_target(search: SearchRequest, db: Session = Depends(get_db)):
-    """Search for a term and create a tradeable attention target with current score only"""
+async def search_attention_target(
+    request: SearchRequest, 
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """Search for attention targets and create them with conservative seeding"""
+    query = request.query.strip()
+    target_type = request.target_type
+    
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    logger.info(f"🔍 Search request: '{query}' (type: {target_type})")
+    
+    # Check if target already exists
+    existing_target = db.query(AttentionTarget).filter(
+        AttentionTarget.search_term.ilike(f"%{query}%")
+    ).first()
+    
+    if existing_target:
+        logger.info(f"✅ Found existing target: {existing_target.name}")
+        return {
+            "id": existing_target.id,
+            "name": existing_target.name,
+            "type": existing_target.type.value,
+            "search_term": existing_target.search_term,
+            "current_attention_score": float(existing_target.current_attention_score),
+            "created": False,
+            "message": f"Found existing target: {existing_target.name}"
+        }
+    
     try:
-        # Check if target already exists
-        existing = db.query(AttentionTarget).filter(
-            AttentionTarget.search_term.ilike(f"%{search.query}%")
-        ).first()
-        
-        if existing:
-            return {
-                "id": existing.id,
-                "target_id": existing.id,
-                "name": existing.name,
-                "query": search.query,
-                "current_attention_score": float(existing.current_attention_score),
-                "type": existing.type.value,
-                "message": "Target already exists"
+        # Create new target with Google Trends data
+        async with GoogleTrendsService() as service:
+            logger.info(f"🔍 Creating new target for: {query}")
+            
+            # FIX: Only get current score initially - don't seed all timeframes immediately
+            current_data = await service.get_google_trends_data(query, timeframe="now 1-d")
+            
+            if not current_data.get('success'):
+                error_msg = current_data.get('error', 'Unknown error')
+                if 'Rate limited' in error_msg or 'Circuit breaker' in error_msg:
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Google Trends is rate limiting requests. Please try again in a few minutes."
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=404, 
+                        detail=f"No Google Trends data found for '{query}'. Try a more popular search term."
+                    )
+            
+            current_score = current_data["attention_score"]
+            logger.info(f"✅ Got trend score for {query}: {current_score}")
+            
+            # Map target type
+            type_mapping = {
+                "politician": TargetType.POLITICIAN,
+                "billionaire": TargetType.BILLIONAIRE,
+                "stock": TargetType.STOCK,
+                "country": TargetType.COUNTRY,
+                "meme": TargetType.MEME_STOCK
             }
-        
-        # Create new target with SINGLE API call for current score only
-        logger.info(f"🔍 Creating new target for: {search.query}")
-        
-        async with GoogleTrendsService() as trends:
-            # Get current attention score (SINGLE API CALL)
-            current_data = await trends.get_google_trends_data(search.query)
-            current_score = current_data.get("attention_score", 50.0)
             
             # Create the target
             target = AttentionTarget(
-                name=search.query.title(),
-                type=TargetType(search.target_type),
-                search_term=search.query,
-                description=f"Attention trading target for {search.query}",
-                current_attention_score=Decimal(str(current_score))
+                name=query.title(),
+                type=type_mapping.get(target_type, TargetType.POLITICIAN),
+                search_term=query,
+                current_attention_score=Decimal(str(current_score)),
+                description=f"Google Trends attention score for {query}"
             )
             
             db.add(target)
             db.commit()
             db.refresh(target)
             
-            # Add single current data point (no historical data for new searches)
-            history_entry = AttentionHistory(
-                target_id=target.id,
-                attention_score=Decimal(str(current_score)),
-                timestamp=datetime.utcnow(),
-                data_source="google_trends_real_time",
-                timeframe_used="now",
-                confidence_score=Decimal("1.0")
-            )
-            db.add(history_entry)
-            db.commit()
+            logger.info(f"✅ Created target {query} with current score: {current_score}")
             
-            logger.info(f"✅ Created target {target.name} with current score: {current_score}")
-        
-        return {
-            "id": target.id,
-            "target_id": target.id,
-            "name": target.name,
-            "query": search.query,
-            "current_attention_score": float(target.current_attention_score),
-            "type": target.type.value,
-            "message": "New target created - historical data will build over time"
-        }
-        
+            # FIX: Conservative seeding approach - spread out over time
+            # Start with immediate seeding of just 1-day data (already have it)
+            if current_data.get('timeline') and current_data.get('timeline_timestamps'):
+                try:
+                    from seed_data import store_timeframe_data_with_real_timestamps
+                    await store_timeframe_data_with_real_timestamps(
+                        target, current_data, "1d", "now 1-d", db
+                    )
+                    logger.info("✅ Stored initial 1-day data immediately")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to store initial 1d data: {e}")
+            
+            # FIX: Gradual background seeding - spread over 30+ minutes
+            background_tasks.add_task(
+                gradual_historical_seeding, 
+                target.id, 
+                query,
+                start_delay_minutes=2  # Wait 2 minutes before starting
+            )
+            
+            return {
+                "id": target.id,
+                "name": target.name,
+                "type": target.type.value,
+                "search_term": target.search_term,
+                "current_attention_score": float(target.current_attention_score),
+                "created": True,
+                "message": f"Created {target.name}! More historical data will load gradually over the next 30 minutes to avoid rate limits."
+            }
+            
+    except HTTPException:
+        # Re-raise HTTP exceptions (429, 404)
+        raise
     except Exception as e:
-        logger.error(f"❌ Search error: {e}")
+        logger.error(f"❌ Search failed for '{query}': {e}")
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed: {str(e)}"
         )
+
+
+async def gradual_historical_seeding(target_id: int, search_term: str, start_delay_minutes: int = 2):
+    """Gradual background seeding to avoid rate limits - spread over 30+ minutes"""
+    
+    # Initial delay before starting
+    logger.info(f"📊 Gradual seeding for target {target_id} starting in {start_delay_minutes} minutes...")
+    await asyncio.sleep(start_delay_minutes * 60)
+    
+    db = SessionLocal()
+    try:
+        target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
+        if not target:
+            logger.error(f"❌ Target {target_id} not found for gradual seeding")
+            return
+            
+        logger.info(f"📊 Starting gradual historical seeding for {target.name}")
+        
+        # FIX: Conservative timeframe seeding with long delays (no random)
+        timeframes_with_delays = [
+            ("now 7-d", "7d", 5),      # Wait 5 minutes, then seed 7-day
+            ("today 1-m", "1m", 8),    # Wait 8 more minutes, then seed 1-month  
+            ("today 3-m", "3m", 10),   # Wait 10 more minutes, then seed 3-month
+            ("today 12-m", "1y", 12),  # Wait 12 more minutes, then seed 1-year
+            ("today 5-y", "5y", 15),   # Wait 15 more minutes, then seed 5-year
+        ]
+        
+        seeded_count = 1  # Already have 1d data
+        
+        async with GoogleTrendsService() as service:
+            for timeframe_code, timeframe_name, delay_minutes in timeframes_with_delays:
+                try:
+                    # Wait before each request
+                    logger.info(f"⏱️ Waiting {delay_minutes} minutes before seeding {timeframe_name} data for {target.name}")
+                    await asyncio.sleep(delay_minutes * 60)
+                    
+                    logger.info(f"📅 Seeding {timeframe_name} data for {target.name}...")
+                    data = await service.get_google_trends_data(
+                        search_term, 
+                        timeframe=timeframe_code,
+                    )
+                    
+                    if data and data.get('success') and data.get('timeline'):
+                        from seed_data import store_timeframe_data_with_real_timestamps
+                        await store_timeframe_data_with_real_timestamps(
+                            target, data, timeframe_name, timeframe_code, db
+                        )
+                        seeded_count += 1
+                        logger.info(f"✅ Seeded {timeframe_name} data for {target.name}")
+                    else:
+                        error_msg = data.get('error', 'No timeline data') if data else 'Request failed'
+                        logger.warning(f"⚠️ No {timeframe_name} data for {target.name}: {error_msg}")
+                        
+                        # If we hit rate limits, increase delays for remaining timeframes
+                        if 'Rate limited' in error_msg or 'Circuit breaker' in error_msg:
+                            logger.warning(f"🚫 Rate limited during {timeframe_name} seeding. Extending delays for remaining timeframes.")
+                            # Double remaining delays
+                            remaining_frames = timeframes_with_delays[timeframes_with_delays.index((timeframe_code, timeframe_name, delay_minutes)) + 1:]
+                            for i, (tc, tn, dm) in enumerate(remaining_frames):
+                                timeframes_with_delays[timeframes_with_delays.index((tc, tn, dm))] = (tc, tn, dm * 2)
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to seed {timeframe_name} data for {target.name}: {e}")
+                    # Continue with next timeframe after brief pause
+                    await asyncio.sleep(30)
+            
+            total_time = sum([delay for _, _, delay in timeframes_with_delays])
+            logger.info(f"✅ Gradual seeding complete for {target.name}: {seeded_count}/6 timeframes over {total_time} minutes")
+            
+            # Update target to indicate seeding is complete
+            target.last_updated = datetime.utcnow()
+            db.commit()
+            
+    except Exception as e:
+        logger.error(f"❌ Gradual seeding failed for target {target_id}: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+async def seed_historical_data_for_target(target_id: int, search_term: str):
+    """Background task to seed historical data for a newly created target"""
+    db = SessionLocal()
+    try:
+        target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
+        if not target:
+            logger.error(f"❌ Target {target_id} not found for historical seeding")
+            return
+            
+        logger.info(f"📊 Starting historical data seeding for {target.name}")
+        
+        async with GoogleTrendsService() as service:
+            # Standard Google Trends timeframes
+            timeframes = [
+                ("now 1-d", "1d"),
+                ("now 7-d", "7d"), 
+                ("today 1-m", "1m"),
+                ("today 3-m", "3m"),
+                ("today 12-m", "1y"),
+                ("today 5-y", "5y")
+            ]
+            
+            seeded_count = 0
+            
+            for timeframe_code, timeframe_name in timeframes:
+                try:
+                    logger.info(f"📅 Seeding {timeframe_name} data for {target.name}...")
+                    data = await service.get_google_trends_data(search_term, timeframe=timeframe_code)
+                    
+                    if data and data.get('success') and data.get('timeline'):
+                        await store_timeframe_data_with_real_timestamps(
+                            target, data, timeframe_name, timeframe_code, db
+                        )
+                        seeded_count += 1
+                        logger.info(f"✅ Seeded {timeframe_name} data")
+                    else:
+                        logger.warning(f"⚠️ No {timeframe_name} data available for {target.name}")
+                    
+                    # Rate limit between requests
+                    await asyncio.sleep(2)
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to seed {timeframe_name} data for {target.name}: {e}")
+            
+            logger.info(f"✅ Historical seeding complete for {target.name}: {seeded_count}/6 timeframes")
+            
+            # Update target to indicate seeding is complete
+            target.last_updated = datetime.utcnow()
+            db.commit()
+            
+    except Exception as e:
+        logger.error(f"❌ Historical seeding failed for target {target_id}: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 @app.get("/targets")
 def get_targets(skip: int = 0, limit: int = 20, db: Session = Depends(get_db)):
@@ -278,7 +464,7 @@ def get_target_detail(target_id: int, db: Session = Depends(get_db)):
 
 @app.get("/targets/{target_id}/chart")
 def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(get_db)):
-    """Get chart data - simple timeframe mapping, real-time only on 1-day charts"""
+    """Get chart data"""
     
     target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
     if not target:
@@ -301,16 +487,19 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
     else:
         data_source = "google_trends_5y"
     
-    logger.info(f"📊 Chart request: {days} days -> using {data_source}")
+    logger.info(f"📊 Chart request: {days} days -> trying {data_source}")
     
-    # Get base data from timeframe
+    # Try primary data source first
     base_data = db.query(AttentionHistory).filter(
         AttentionHistory.target_id == target_id,
         AttentionHistory.data_source == data_source,
         AttentionHistory.timestamp >= start_time
     ).order_by(AttentionHistory.timestamp.asc()).all()
     
-    # For 1-day charts ONLY, add real-time data
+    all_data = list(base_data)
+    actual_data_source = data_source
+    
+    # For 1-day charts, always try to add real-time data
     if days <= 1:
         logger.info("📊 Adding real-time data for 1-day chart")
         realtime_data = db.query(AttentionHistory).filter(
@@ -319,30 +508,43 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
             AttentionHistory.timestamp >= start_time
         ).order_by(AttentionHistory.timestamp.asc()).all()
         
-        # Combine and sort
-        all_data = list(base_data) + list(realtime_data)
-        all_data.sort(key=lambda x: x.timestamp)
-        
-        logger.info(f"📊 Combined data: {len(base_data)} base + {len(realtime_data)} realtime = {len(all_data)} total")
-    else:
-        all_data = base_data
+        if realtime_data:
+            # Combine and sort
+            all_data = list(all_data) + list(realtime_data)
+            all_data.sort(key=lambda x: x.timestamp)
+            logger.info(f"📊 Combined data: {len(base_data)} base + {len(realtime_data)} realtime = {len(all_data)} total")
     
+    # FIX: If still no data, create a synthetic data point from current score
     if not all_data:
-        logger.warning(f"No data found for target {target_id} with {data_source}")
+        logger.warning(f"No historical data found for target {target_id}. Creating synthetic data point.")
+        
+        # Create a single data point with current score
+        synthetic_data_point = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "attention_score": float(target.current_attention_score),
+            "data_source": "current_score_synthetic"
+        }
+        
         return {
             "target": {
                 "id": target.id,
                 "name": target.name,
                 "current_attention_score": float(target.current_attention_score)
             },
-            "data": [],
-            "data_count": 0,
-            "data_source": data_source,
+            "data": [synthetic_data_point],
+            "data_count": 1,
+            "data_source": "synthetic",
             "date_range": {
                 "start": start_time.isoformat(),
                 "end": end_time.isoformat(),
                 "days": days
-            }
+            },
+            "sampling_info": {
+                "granularity": "current_only",
+                "total_points_available": 1,
+                "is_synthetic": True
+            },
+            "message": "Historical data is being loaded in the background. Chart will update automatically when ready."
         }
     
     # Convert to response format
@@ -356,6 +558,7 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
     ]
     
     # Simple sampling if too many points
+    original_count = len(data_points)
     if len(data_points) > 200:
         step = len(data_points) // 150
         data_points = [data_points[i] for i in range(0, len(data_points), step)]
@@ -366,7 +569,18 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
                 "data_source": all_data[-1].data_source
             })
     
-    logger.info(f"📊 Returning {len(data_points)} points for {target.name} ({days}d)")
+    # Determine granularity based on actual data source used
+    granularity_map = {
+        "google_trends_realtime": "real-time updates",
+        "google_trends_1d": "hourly data",
+        "google_trends_7d": "daily data", 
+        "google_trends_1m": "daily data",
+        "google_trends_3m": "weekly data",
+        "google_trends_1y": "monthly data",
+        "google_trends_5y": "monthly data"
+    }
+    
+    logger.info(f"📊 Returning {len(data_points)} points for {target.name} ({days}d) using {actual_data_source}")
     
     return {
         "target": {
@@ -376,11 +590,17 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
         },
         "data": data_points,
         "data_count": len(data_points),
-        "data_source": data_source,
+        "data_source": actual_data_source,
         "date_range": {
             "start": start_time.isoformat(),
             "end": end_time.isoformat(),
             "days": days
+        },
+        "sampling_info": {
+            "granularity": granularity_map.get(actual_data_source, "optimized sampling"),
+            "total_points_available": original_count,
+            "sampled_points": len(data_points),
+            "is_synthetic": False
         }
     }
 
@@ -720,13 +940,6 @@ async def start_background_tasks():
         
     except ImportError as e:
         logger.error(f"❌ Failed to import background_updater: {e}")
-        # Fallback to service method
-        try:
-            from google_trends_service import run_background_updates
-            asyncio.create_task(run_background_updates())
-            logger.info("✅ Fallback background data updates started")
-        except ImportError:
-            logger.error("❌ No background update system available")
 
 @app.on_event("startup")
 async def startup_event():

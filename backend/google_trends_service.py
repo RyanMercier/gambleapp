@@ -130,7 +130,7 @@ class GoogleTrendsService:
         # Build payload
         payload = {
             'hl': 'en-US',
-            'tz': 360,
+            'tz': 0,
             'req': json.dumps({
                 'comparisonItem': [{'keyword': search_term, 'time': timeframe, 'geo': ''}],
                 'category': 0,
@@ -173,7 +173,7 @@ class GoogleTrendsService:
         payload = {
             'req': json.dumps(self.timeline_widget['request']),
             'token': self.timeline_widget['token'],
-            'tz': 360
+            'tz': 0
         }
         
         try:
@@ -205,6 +205,7 @@ class GoogleTrendsService:
                                 timestamp_float = float(timestamp_str)
                                 # Convert to UTC datetime
                                 dt = datetime.fromtimestamp(timestamp_float, tz=timezone.utc)
+                                dt = dt - timedelta(hours=4)  # Subtract the 4-hour offset for NY Time
                                 # Store as UTC but without timezone info for database compatibility
                                 timestamps.append(dt.replace(tzinfo=None))
                                 logger.debug(f"🕐 Parsed timestamp: {timestamp_str} -> {dt}")
@@ -258,6 +259,7 @@ class GoogleTrendsService:
             
             # Store real-time data point with current UTC time
             current_utc = datetime.utcnow()
+            current_utc = current_utc - timedelta(hours=4) # Adjust for NY Time offset
             
             history_entry = AttentionHistory(
                 target_id=target.id,
