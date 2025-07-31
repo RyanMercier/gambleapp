@@ -279,91 +279,55 @@ def get_target_detail(target_id: int, db: Session = Depends(get_db)):
 
 @app.get("/targets/{target_id}/chart")
 def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(get_db)):
-    """Get chart data using appropriate timeframe + recent real-time data"""
+    """Get chart data - simple timeframe mapping, real-time only on 1-day charts"""
     
     target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
     
-    # Map requested days to the appropriate data source
-    timeframe_mapping = {
-        1: "1_day",
-        7: "7_days", 
-        30: "30_days",
-        90: "90_days",
-        180: "1_year",
-        365: "1_year",
-        1825: "5_years"
-    }
-    
-    # Find the best matching timeframe
-    best_timeframe = None
-    for day_threshold in sorted(timeframe_mapping.keys()):
-        if days <= day_threshold:
-            best_timeframe = timeframe_mapping[day_threshold]
-            break
-    
-    if not best_timeframe:
-        best_timeframe = "5_years"
-    
-    logger.info(f"📊 Chart request: {days} days -> using {best_timeframe} data")
-    
     end_time = datetime.utcnow()
     start_time = end_time - timedelta(days=days)
     
-    # Get data from the specific timeframe source
+    # Simple timeframe mapping to data sources
+    if days <= 1:
+        data_source = "google_trends_1d"
+    elif days <= 7:
+        data_source = "google_trends_7d"
+    elif days <= 30:
+        data_source = "google_trends_1m"
+    elif days <= 90:
+        data_source = "google_trends_3m"
+    elif days <= 365:
+        data_source = "google_trends_1y"
+    else:
+        data_source = "google_trends_5y"
+    
+    logger.info(f"📊 Chart request: {days} days -> using {data_source}")
+    
+    # Get base data from timeframe
     base_data = db.query(AttentionHistory).filter(
         AttentionHistory.target_id == target_id,
-        AttentionHistory.data_source.like(f'%{best_timeframe}%'),
-        AttentionHistory.timestamp >= start_time,
-        AttentionHistory.timestamp <= end_time
+        AttentionHistory.data_source == data_source,
+        AttentionHistory.timestamp >= start_time
     ).order_by(AttentionHistory.timestamp.asc()).all()
     
-    # For short timeframes (1-7 days), also get recent real-time data
-    realtime_data = []
-    if days <= 7:
-        # Get real-time data from the last few hours to show live updates
-        realtime_cutoff = end_time - timedelta(hours=6)
+    # For 1-day charts ONLY, add real-time data
+    if days <= 1:
+        logger.info("📊 Adding real-time data for 1-day chart")
         realtime_data = db.query(AttentionHistory).filter(
             AttentionHistory.target_id == target_id,
-            AttentionHistory.data_source == "google_trends_real_time",
-            AttentionHistory.timestamp >= realtime_cutoff,
-            AttentionHistory.timestamp <= end_time
+            AttentionHistory.data_source == "google_trends_realtime",
+            AttentionHistory.timestamp >= start_time
         ).order_by(AttentionHistory.timestamp.asc()).all()
         
-        logger.info(f"📊 Including {len(realtime_data)} recent real-time points")
-    
-    # Combine data sources
-    all_data = list(base_data) + list(realtime_data)
-    
-    # Remove duplicates by timestamp (prefer real-time data if timestamps are close)
-    if all_data:
-        # Sort by timestamp
+        # Combine and sort
+        all_data = list(base_data) + list(realtime_data)
         all_data.sort(key=lambda x: x.timestamp)
-        
-        # Remove duplicates within 5 minutes of each other (prefer real-time)
-        deduplicated_data = []
-        for point in all_data:
-            # Check if we already have a point within 5 minutes
-            is_duplicate = False
-            for existing_point in deduplicated_data:
-                time_diff = abs((point.timestamp - existing_point.timestamp).total_seconds())
-                if time_diff < 300:  # 5 minutes
-                    # If this is real-time data and existing isn't, replace it
-                    if "real_time" in point.data_source and "real_time" not in existing_point.data_source:
-                        deduplicated_data.remove(existing_point)
-                        deduplicated_data.append(point)
-                    is_duplicate = True
-                    break
-            
-            if not is_duplicate:
-                deduplicated_data.append(point)
-        
-        all_data = deduplicated_data
-        all_data.sort(key=lambda x: x.timestamp)
+    else:
+        all_data = base_data
     
     if not all_data:
-        logger.warning(f"No data found for target {target_id} in timeframe {days} days")
+        logger.warning(f"No data found for target {target_id} with {data_source}")
         return {
             "target": {
                 "id": target.id,
@@ -372,14 +336,11 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
             },
             "data": [],
             "data_count": 0,
+            "data_source": data_source,
             "date_range": {
                 "start": start_time.isoformat(),
                 "end": end_time.isoformat(),
                 "days": days
-            },
-            "scale_info": {
-                "requested_timeframe": best_timeframe,
-                "data_sources": "none"
             }
         }
     
@@ -393,21 +354,18 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
         for point in all_data
     ]
     
-    # Light sampling if too many points
+    # Simple sampling if too many points
     if len(data_points) > 200:
         step = len(data_points) // 150
-        sampled_indices = list(range(0, len(data_points), step))
-        if sampled_indices[-1] != len(data_points) - 1:
-            sampled_indices.append(len(data_points) - 1)
-        data_points = [data_points[i] for i in sampled_indices]
-        sampling_applied = True
-    else:
-        sampling_applied = False
+        data_points = [data_points[i] for i in range(0, len(data_points), step)]
+        if data_points[-1] != all_data[-1]:
+            data_points.append({
+                "timestamp": all_data[-1].timestamp.isoformat(),
+                "attention_score": float(all_data[-1].attention_score),
+                "data_source": all_data[-1].data_source
+            })
     
-    # Get the data sources used
-    data_sources_used = list(set(point.data_source for point in all_data))
-    
-    logger.info(f"📊 Chart for target {target_id} ({days} days): {len(all_data)} → {len(data_points)} points from {data_sources_used}")
+    logger.info(f"📊 Returning {len(data_points)} points for {target.name} ({days}d)")
     
     return {
         "target": {
@@ -417,58 +375,13 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
         },
         "data": data_points,
         "data_count": len(data_points),
+        "data_source": data_source,
         "date_range": {
             "start": start_time.isoformat(),
             "end": end_time.isoformat(),
             "days": days
-        },
-        "scale_info": {
-            "requested_timeframe": best_timeframe,
-            "data_sources": data_sources_used,
-            "base_data_points": len(base_data),
-            "realtime_data_points": len(realtime_data),
-            "total_points": len(all_data),
-            "points_returned": len(data_points),
-            "sampling_applied": sampling_applied,
-            "scale_note": f"Primary scale: {best_timeframe}, includes recent real-time updates"
         }
     }
-
-def sample_data_for_chart(data_points: list, days: int) -> list:
-    """Sample data points for optimal chart display based on timeframe"""
-    
-    if not data_points:
-        return []
-    
-    # If we have few points, return all
-    if len(data_points) <= 100:
-        return data_points
-    
-    # Determine target number of points based on timeframe
-    if days <= 1:
-        target_points = 96  # Every 15 minutes
-    elif days <= 7:
-        target_points = 168  # Every hour
-    elif days <= 30:
-        target_points = 120  # Every 6 hours
-    elif days <= 365:
-        target_points = 73   # Every 5 days
-    else:
-        target_points = 52   # Every week
-    
-    # If we have fewer points than target, return all
-    if len(data_points) <= target_points:
-        return data_points
-    
-    # Sample evenly across the timeframe
-    step = len(data_points) / target_points
-    sampled_indices = [int(i * step) for i in range(target_points)]
-    
-    # Always include the last point
-    if sampled_indices[-1] != len(data_points) - 1:
-        sampled_indices.append(len(data_points) - 1)
-    
-    return [data_points[i] for i in sampled_indices]
 
 # Trading endpoints
 @app.post("/trade")
@@ -537,13 +450,6 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
         attention_score_at_entry=target.current_attention_score
     )
     db.add(new_trade)
-    
-    db.commit()
-    
-    return {
-        "message": "Trade executed successfully",
-        "balance": float(current_user.balance)
-    }
     
     db.commit()
     
@@ -696,62 +602,6 @@ def get_leaderboard(db: Session = Depends(get_db)):
         }
         for i, user in enumerate(users)
     ]
-
-# Admin endpoints
-@app.get("/admin/cleanup")
-async def cleanup_database(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Admin endpoint to cleanup old data"""
-    try:
-        # Simple cleanup - remove old history entries (keep last 100 per target)
-        targets = db.query(AttentionTarget).all()
-        
-        for target in targets:
-            # Keep only the latest 100 history entries per target
-            old_entries = db.query(AttentionHistory).filter(
-                AttentionHistory.target_id == target.id
-            ).order_by(AttentionHistory.timestamp.desc()).offset(100).all()
-            
-            for entry in old_entries:
-                db.delete(entry)
-        
-        db.commit()
-        logger.info("Database cleanup completed")
-        return {"message": "Database cleanup completed", "status": "success"}
-    except Exception as e:
-        logger.error(f"Cleanup failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
-
-@app.get("/admin/force-update/{target_id}")
-async def force_update_target(target_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Force update a specific target with fresh Google Trends data"""
-    target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
-    if not target:
-        raise HTTPException(status_code=404, detail="Target not found")
-    
-    try:
-        async with GoogleTrendsService() as service:
-            success = await service.update_target_data(target, db)
-        
-        if success:
-            # Send real-time update to connected clients
-            await manager.send_target_update(target_id, {
-                "type": "forced_update",
-                "target_id": target_id,
-                "attention_score": float(target.current_attention_score),
-                "timestamp": datetime.utcnow().isoformat()
-            })
-            
-            return {
-                "message": f"Target {target.name} updated successfully",
-                "attention_score": float(target.current_attention_score),
-                "status": "success"
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Update failed")
-            
-    except Exception as e:
-        logger.error(f"Force update failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Update failed: {str(e)}")
 
 # Health check endpoints
 @app.get("/")
