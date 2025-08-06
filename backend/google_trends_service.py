@@ -461,6 +461,7 @@ class GoogleTrendsService:
         try:
             timestamp_float = float(timestamp_input)
             dt = datetime.fromtimestamp(timestamp_float, tz=timezone.utc)
+            dt = dt - timedelta(hours=4)  # Subtract the 4-hour offset for NY Time
             return dt.replace(tzinfo=None)
         except (ValueError, OSError, TypeError) as e:
             logger.warning(f"⚠️ Failed to parse timestamp {timestamp_input}: {e}")
