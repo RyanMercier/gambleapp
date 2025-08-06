@@ -303,7 +303,7 @@
               
               <!-- Autocomplete Dropdown -->
               {#if showAutocomplete}
-                <div class="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-white/20 rounded-lg shadow-xl z-50 max-h-60 overflow-y-auto">
+                <div class="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-white/20 rounded-lg shadow-xl z-[9999] max-h-60 overflow-y-auto">
                   {#if autocompleteLoading}
                     <div class="p-3 text-center text-gray-400">
                       <div class="w-4 h-4 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin mx-auto"></div>
@@ -317,7 +317,7 @@
                       >
                         <div class="font-medium">{item.name}</div>
                         {#if item.description}
-                          <div class="text-sm text-gray-400 truncate">{item.description}</div>
+                          <div class="relative z-500 text-sm text-gray-400 truncate">{item.description}</div>
                         {/if}
                       </button>
                     {/each}
@@ -392,7 +392,7 @@
     {/if}
 
     <!-- Featured Targets Section -->
-    <div class="card">
+    <div class="card relative">
       <div class="flex items-center justify-between mb-6">
         <h2 class="text-xl font-semibold">🌟 Featured Targets</h2>
         <div class="flex items-center gap-2">
@@ -458,7 +458,7 @@
 
 <style>
   .card {
-    @apply bg-gray-900/50 backdrop-blur-sm border border-gray-800 rounded-xl p-6 shadow-xl;
+    @apply bg-gray-900/50 border border-gray-800 rounded-xl p-6 shadow-xl;
   }
   
   .btn {
