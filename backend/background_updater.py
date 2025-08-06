@@ -1,9 +1,3 @@
-# backend/background_updater.py - Fixed circular import issue
-
-"""
-Complete Background Updater - Fixed circular import by accepting websocket_manager as parameter
-"""
-
 import asyncio
 import logging
 from datetime import datetime
@@ -23,7 +17,7 @@ _updater_status = {
 }
 
 # FIX: Accept websocket_manager as parameter to avoid circular imports
-async def start_background_updates(websocket_manager=None):
+async def start_background_updates(websocket_manager=None, use_tor=False):
     """Start background updates with WebSocket support - function name that main.py expects"""
     global _updater_status
     
@@ -46,7 +40,7 @@ async def start_background_updates(websocket_manager=None):
             logger.info(f"🔄 Starting update cycle #{update_count}")
             
             # FIX: Pass WebSocket manager to GoogleTrendsService constructor
-            async with GoogleTrendsService(websocket_manager=websocket_manager) as service:
+            async with GoogleTrendsService(websocket_manager=websocket_manager, use_tor=use_tor) as service:
                 await service.update_all_targets()
             
             _updater_status["last_update"] = datetime.utcnow()
@@ -65,9 +59,9 @@ async def start_background_updates(websocket_manager=None):
             logger.info("⏰ Waiting 5 minutes before retry...")
             await asyncio.sleep(300)
 
-async def run_background_updates(websocket_manager=None):
+async def run_background_updates(websocket_manager=None, use_tor=False):
     """Alternative function name for compatibility"""
-    await start_background_updates(websocket_manager)
+    await start_background_updates(websocket_manager, use_tor)
 
 def stop_background_updates():
     """Stop the background updater"""
@@ -87,7 +81,7 @@ def get_updater_status():
     }
 
 # Single target update function for testing with WebSocket notifications
-async def update_single_target(target_name: str, websocket_manager=None):
+async def update_single_target(target_name: str, websocket_manager=None, use_tor=False):
     """Update a single target by name with WebSocket notification - useful for testing"""
     try:
         from database import SessionLocal
@@ -119,4 +113,4 @@ async def update_single_target(target_name: str, websocket_manager=None):
 
 if __name__ == "__main__":
     # Can be run directly for testing (without WebSocket manager)
-    asyncio.run(start_background_updates())
+    asyncio.run(start_background_updates(use_tor=False))

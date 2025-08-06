@@ -9,10 +9,14 @@ from decimal import Decimal
 from database import SessionLocal
 from models import AttentionTarget, AttentionHistory, TargetType
 from google_trends_service import GoogleTrendsService
+import os
+import sys
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+USE_TOR = "--torify" in sys.argv or os.getenv('USE_TOR', 'false').lower() == 'true'
 
 # Updated sample targets with new category names
 SAMPLE_TARGETS = [
@@ -194,7 +198,7 @@ async def seed_sample_targets():
     created_count = 0
     
     try:
-        async with GoogleTrendsService() as service:
+        async with GoogleTrendsService(use_tor=USE_TOR) as service:
             for i, target_data in enumerate(SAMPLE_TARGETS):
                 try:
                     logger.info(f"📈 [{i+1}/{len(SAMPLE_TARGETS)}] Processing: {target_data['name']} ({target_data['type']})")

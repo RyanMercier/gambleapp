@@ -1,10 +1,18 @@
 import asyncio
 import uvicorn
 import logging
+import sys
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def check_tor_flag():
+    """Check if --torify flag was passed"""
+    use_tor = "--torify" in sys.argv or "--tor" in sys.argv
+    if use_tor:
+        logger.info("🧅 Tor proxy mode enabled")
+    return use_tor
 
 async def initialize_database():
     """Initialize database with proper async handling"""
@@ -63,6 +71,13 @@ async def initialize_database():
 def main():
     """Main server startup function"""
     print("🚀 Starting TrendBet API server...")
+
+    use_tor = check_tor_flag()
+    
+    # Set environment variable for main.py
+    import os
+    if use_tor:
+        os.environ['USE_TOR'] = 'true'
     
     try:
         # Run database initialization with proper async handling

@@ -24,6 +24,12 @@ from auth import (
     decode_access_token, get_current_user
 )
 
+import sys
+import os
+
+USE_TOR = "--torify" in sys.argv or os.getenv('USE_TOR', 'false').lower() == 'true'
+
+
 app = FastAPI(title="TrendBet Attention Trading API", version="2.0.0")
 
 app.add_middleware(
@@ -384,7 +390,7 @@ async def search_attention_target(
     
     # Create new target using CSV data
     try:
-        async with GoogleTrendsService(websocket_manager=manager) as service:
+        async with GoogleTrendsService(websocket_manager=manager, use_tor=USE_TOR) as service:
             trends_data = await service.get_google_trends_data(best_match['search_term'])
             
             if not trends_data.get('success'):
@@ -488,7 +494,7 @@ async def gradual_historical_seeding(target_id: int, search_term: str, start_del
         
         seeded_count = 1  # Already have 1d data
         
-        async with GoogleTrendsService(websocket_manager=manager) as service:
+        async with GoogleTrendsService(websocket_manager=manager, use_tor=USE_TOR) as service:
             for timeframe_code, timeframe_name, delay_minutes in timeframes_with_delays:
                 try:
                     # Wait before each request
@@ -549,7 +555,7 @@ async def seed_historical_data_for_target(target_id: int, search_term: str):
             
         logger.info(f"📊 Starting historical data seeding for {target.name}")
         
-        async with GoogleTrendsService(websocket_manager=manager) as service:
+        async with GoogleTrendsService(websocket_manager=manager, use_tor=USE_TOR) as service:
             # Standard Google Trends timeframes
             timeframes = [
                 ("now 1-d", "1d"),
@@ -1023,7 +1029,7 @@ async def force_update_target(target_id: int, current_user: User = Depends(get_c
         raise HTTPException(status_code=404, detail="Target not found")
     
     try:
-        async with GoogleTrendsService(websocket_manager=manager) as service:
+        async with GoogleTrendsService(websocket_manager=manager, use_tor=USE_TOR) as service:
             success = await service.update_target_data(target, db)
         
         if success:
@@ -1104,7 +1110,7 @@ async def start_background_tasks():
         from background_updater import start_background_updates
         
         # Pass the WebSocket manager to enable real-time updates
-        asyncio.create_task(start_background_updates(websocket_manager=manager))
+        asyncio.create_task(start_background_updates(websocket_manager=manager, use_tor=USE_TOR))
         logger.info("✅ Background data updates started with WebSocket support")
         
     except ImportError as e:
@@ -1112,7 +1118,7 @@ async def start_background_tasks():
         # Fallback to service method with WebSocket manager
         try:
             from google_trends_service import run_background_updates
-            asyncio.create_task(run_background_updates(websocket_manager=manager))
+            asyncio.create_task(run_background_updates(websocket_manager=manager, use_tor=USE_TOR))
             logger.info("✅ Fallback background data updates started with WebSocket support")
         except ImportError:
             logger.error("❌ No background update system available")
@@ -1121,6 +1127,10 @@ async def start_background_tasks():
 async def startup_event():
     """Initialize the application with real-time capabilities"""
     logger.info("🚀 TrendBet API starting up...")
+    if USE_TOR:
+        logger.info("🧅 Tor proxy enabled for Google Trends requests")
+    else:
+        logger.info("🔗 Direct connections enabled for Google Trends requests")
     
     # Start background tasks for real-time updates
     await start_background_tasks()
