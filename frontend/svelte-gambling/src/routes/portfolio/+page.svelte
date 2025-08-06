@@ -7,6 +7,7 @@
   let portfolio = null;
   let trades = [];
   let loading = true;
+  let error = '';
   let showTrades = false;
 
   onMount(async () => {
@@ -14,192 +15,201 @@
       goto('/login');
       return;
     }
-
-    await loadPortfolio();
-    await loadTradeHistory();
+    await loadData();
   });
 
-  async function loadPortfolio() {
+  async function loadData() {
+    loading = true;
+    error = '';
+    
     try {
-      const data = await apiFetch('/portfolio');
-      portfolio = data;
-    } catch (error) {
-      console.error('Failed to load portfolio:', error);
-    }
-  }
+      const [portfolioData, tradesData] = await Promise.all([
+        apiFetch('/portfolio'),
+        apiFetch('/trades/my').catch(() => ({ trades: [] }))
+      ]);
 
-  async function loadTradeHistory() {
-    try {
-      const data = await apiFetch('/trades/my');
-      trades = data.slice(0, 10); // Last 10 trades
-    } catch (error) {
-      console.error('Failed to load trade history:', error);
-      trades = []; // Fallback to empty array
+      portfolio = portfolioData;
+      trades = tradesData.trades || tradesData || [];
+    } catch (err) {
+      error = err.message || 'Failed to load portfolio data';
     } finally {
       loading = false;
     }
   }
 
   function formatCurrency(amount) {
-    return `$${parseFloat(amount).toFixed(2)}`;
+    return `$${parseFloat(amount || 0).toFixed(2)}`;
   }
 
-  function formatNumber(num) {
+  function formatNumber(num, decimals = 2) {
     return new Intl.NumberFormat('en-US', {
-      maximumFractionDigits: 2,
-      minimumFractionDigits: 2
-    }).format(num);
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals
+    }).format(num || 0);
   }
 
   function formatDate(dateString) {
-    return new Date(dateString).toLocaleDateString();
-  }
-
-  function formatDateTime(dateString) {
-    return new Date(dateString).toLocaleString();
+    return new Date(dateString).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   }
 
   function getTypeIcon(type) {
     const icons = {
       politician: '🏛️',
+      celebrity: '⭐',
       billionaire: '💰',
       country: '🌍',
-      stock: '📈'
+      stock: '📈',
+      crypto: '₿',
+      game: '🎮'
     };
     return icons[type] || '📊';
   }
 
-  function getOverallPerformance() {
-    if (!portfolio || portfolio.total_pnl === undefined) return 'stable';
-    if (portfolio.total_pnl > 0) return 'positive';
-    if (portfolio.total_pnl < 0) return 'negative';
-    return 'stable';
+  function getPerformanceColor(pnl) {
+    if (pnl > 0) return 'text-emerald-400';
+    if (pnl < 0) return 'text-red-400';
+    return 'text-gray-400';
   }
-
-  $: overallPerformance = getOverallPerformance();
 </script>
 
 <svelte:head>
   <title>Portfolio - TrendBet</title>
 </svelte:head>
 
-<div class="min-h-screen p-6">
-  <div class="max-w-6xl mx-auto">
-    <!-- Header -->
-    <div class="mb-8">
-      <h1 class="text-3xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">
-        Your Portfolio
-      </h1>
-      <p class="text-gray-400">Track your attention trading positions and performance</p>
+<div class="container">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-3xl font-bold">💼 Portfolio</h1>
+    <button 
+      class="btn btn-primary"
+      on:click={loadData}
+      disabled={loading}
+    >
+      {loading ? '⟳' : '🔄'} Refresh
+    </button>
+  </div>
+
+  {#if error}
+    <div class="alert alert-error mb-6">
+      <div class="flex items-center gap-2">
+        <span class="text-lg">⚠️</span>
+        <div>
+          <h3 class="font-semibold">Error Loading Portfolio</h3>
+          <p class="text-sm text-red-300">{error}</p>
+        </div>
+      </div>
+      <button class="btn btn-sm" on:click={loadData}>Try Again</button>
+    </div>
+  {/if}
+
+  {#if loading}
+    <div class="text-center py-12">
+      <div class="w-8 h-8 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
+      <p class="text-gray-400">Loading your portfolio...</p>
+    </div>
+  {:else if portfolio}
+    <!-- Portfolio Summary -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div class="card text-center">
+        <h3 class="text-lg font-semibold mb-2">💰 Cash Balance</h3>
+        <div class="text-3xl font-bold text-blue-400">{formatCurrency(portfolio.cash_balance)}</div>
+      </div>
+
+      <div class="card text-center">
+        <h3 class="text-lg font-semibold mb-2">📈 Positions Value</h3>
+        <div class="text-3xl font-bold text-emerald-400">{formatCurrency(portfolio.total_value)}</div>
+      </div>
+
+      <div class="card text-center">
+        <h3 class="text-lg font-semibold mb-2">💎 Total Portfolio</h3>
+        <div class="text-3xl font-bold text-purple-400">{formatCurrency(portfolio.total_portfolio_value)}</div>
+      </div>
     </div>
 
-    {#if loading}
-      <div class="flex items-center justify-center py-12">
-        <div class="w-8 h-8 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin"></div>
-      </div>
-    {:else}
-      <!-- Portfolio Overview -->
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-        <div class="card text-center">
-          <div class="text-2xl font-bold text-blue-400 mb-1">{formatCurrency(portfolio?.cash_balance || 0)}</div>
-          <div class="text-sm text-gray-400">Cash Balance</div>
-        </div>
-        
-        <div class="card text-center">
-          <div class="text-2xl font-bold text-indigo-400 mb-1">{formatCurrency(portfolio?.portfolio_value || 0)}</div>
-          <div class="text-sm text-gray-400">Portfolio Value</div>
-        </div>
-        
-        <div class="card text-center">
-          <div class="text-2xl font-bold text-emerald-400 mb-1">{formatCurrency(portfolio?.total_value || 0)}</div>
-          <div class="text-sm text-gray-400">Total Value</div>
-        </div>
-        
-        <div class="card text-center">
-          <div class="text-2xl font-bold {overallPerformance === 'positive' ? 'text-emerald-400' : overallPerformance === 'negative' ? 'text-red-400' : 'text-gray-400'} mb-1">
-            {portfolio?.total_pnl !== undefined ? 
-              (portfolio.total_pnl >= 0 ? '+' : '') + formatCurrency(portfolio.total_pnl) : 
-              '$0.00'}
-          </div>
-          <div class="text-sm text-gray-400">
-            Total P&L
-            {#if portfolio?.total_pnl_percent !== undefined}
-              <span class="{overallPerformance === 'positive' ? 'text-emerald-400' : overallPerformance === 'negative' ? 'text-red-400' : 'text-gray-400'}">
-                ({portfolio.total_pnl_percent >= 0 ? '+' : ''}{formatNumber(portfolio.total_pnl_percent)}%)
-              </span>
-            {/if}
-          </div>
-        </div>
-      </div>
+    <!-- Navigation Tabs -->
+    <div class="flex gap-2 mb-6">
+      <button
+        class="btn {!showTrades ? 'btn-primary' : 'btn-secondary'} text-sm"
+        on:click={() => showTrades = false}
+      >
+        📊 Positions
+      </button>
+      <button
+        class="btn {showTrades ? 'btn-primary' : 'btn-secondary'} text-sm"
+        on:click={() => showTrades = true}
+      >
+        📋 Trade History
+      </button>
+    </div>
 
-      <!-- Active Positions -->
-      <div class="card mb-8">
-        <div class="flex items-center justify-between mb-6">
-          <h2 class="text-xl font-semibold">💼 Active Positions</h2>
-          <div class="text-sm text-gray-400">
-            {portfolio?.positions?.length || 0} positions
-          </div>
-        </div>
+    {#if !showTrades}
+      <!-- Current Positions -->
+      <div class="card">
+        <h2 class="text-xl font-semibold mb-4">🎯 Current Positions</h2>
         
-        {#if portfolio?.positions && portfolio.positions.length > 0}
+        {#if portfolio.positions && portfolio.positions.length > 0}
           <div class="overflow-x-auto">
-            <table class="w-full">
+            <table class="table w-full">
               <thead>
-                <tr class="text-left border-b border-white/10">
-                  <th class="pb-3 text-sm font-medium text-gray-400">Target</th>
-                  <th class="pb-3 text-sm font-medium text-gray-400 text-right">Shares</th>
-                  <th class="pb-3 text-sm font-medium text-gray-400 text-right">Avg Price</th>
-                  <th class="pb-3 text-sm font-medium text-gray-400 text-right">Current Price</th>
-                  <th class="pb-3 text-sm font-medium text-gray-400 text-right">Value</th>
-                  <th class="pb-3 text-sm font-medium text-gray-400 text-right">P&L</th>
-                  <th class="pb-3 text-sm font-medium text-gray-400 text-center">Actions</th>
+                <tr class="border-gray-700">
+                  <th class="text-left">Target</th>
+                  <th class="text-right">Stake</th>
+                  <th class="text-right">Entry Score</th>
+                  <th class="text-right">Current Score</th>
+                  <th class="text-right">Value</th>
+                  <th class="text-right">P&L</th>
+                  <th class="text-center">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {#each portfolio.positions as position}
-                  <tr class="border-b border-white/5 hover:bg-white/5">
+                  <tr class="border-gray-700/50">
                     <td class="py-3">
                       <div class="flex items-center gap-3">
-                        <span class="text-lg">{getTypeIcon(position.target_type)}</span>
+                        <span class="text-xl">{getTypeIcon(position.target.type)}</span>
                         <div>
-                          <div class="font-medium">{position.target_name}</div>
-                          <div class="text-xs text-gray-400 capitalize">{position.target_type}</div>
+                          <div class="font-medium">{position.target.name}</div>
+                          <div class="text-xs text-gray-400">{position.target.type}</div>
                         </div>
                       </div>
                     </td>
-                    <td class="py-3 text-right font-medium">
-                      {formatNumber(position.shares_owned)}
+                    <td class="py-3 text-right">
+                      <div class="font-medium">{formatCurrency(position.attention_stakes)}</div>
                     </td>
                     <td class="py-3 text-right">
-                      {formatCurrency(position.average_price)}
+                      <div class="font-medium">{formatNumber(position.average_entry_score)}</div>
                     </td>
                     <td class="py-3 text-right">
-                      {formatCurrency(position.current_price)}
-                    </td>
-                    <td class="py-3 text-right font-medium">
-                      {formatCurrency(position.position_value)}
+                      <div class="font-medium">{formatNumber(position.target.current_attention_score)}</div>
                     </td>
                     <td class="py-3 text-right">
-                      <div class="font-medium {position.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">
+                      <div class="font-medium">{formatCurrency(position.current_value)}</div>
+                    </td>
+                    <td class="py-3 text-right">
+                      <div class="font-medium {getPerformanceColor(position.pnl)}">
                         {position.pnl >= 0 ? '+' : ''}{formatCurrency(position.pnl)}
                       </div>
-                      <div class="text-xs {position.pnl_percent >= 0 ? 'text-emerald-400' : 'text-red-400'}">
-                        {position.pnl_percent >= 0 ? '+' : ''}{formatNumber(position.pnl_percent)}%
+                      <div class="text-xs {getPerformanceColor(position.pnl)}">
+                        {position.pnl_percent >= 0 ? '+' : ''}{formatNumber(position.pnl_percent, 1)}%
                       </div>
                     </td>
                     <td class="py-3 text-center">
                       <div class="flex gap-1 justify-center">
                         <button 
                           class="btn btn-success text-xs px-2 py-1"
-                          on:click={() => goto(`/trade/${position.target_id}?type=buy`)}
+                          on:click={() => goto(`/trade/${position.target.id}?type=buy`)}
                         >
-                          Buy
+                          Long
                         </button>
                         <button 
                           class="btn btn-danger text-xs px-2 py-1"
-                          on:click={() => goto(`/trade/${position.target_id}?type=sell`)}
+                          on:click={() => goto(`/trade/${position.target.id}?type=sell`)}
                         >
-                          Sell
+                          Close
                         </button>
                       </div>
                     </td>
@@ -219,129 +229,93 @@
           </div>
         {/if}
       </div>
-
-      <!-- Navigation Tabs -->
-      <div class="flex gap-2 mb-6">
-        <button
-          class="btn {!showTrades ? 'btn-primary' : 'btn-secondary'} text-sm"
-          on:click={() => showTrades = false}
-        >
-          📊 Portfolio Summary
-        </button>
-        <button
-          class="btn {showTrades ? 'btn-primary' : 'btn-secondary'} text-sm"
-          on:click={() => showTrades = true}
-        >
-          📈 Trade History
-        </button>
-      </div>
-
-      {#if showTrades}
-        <!-- Trade History -->
-        <div class="card">
-          <div class="flex items-center justify-between mb-6">
-            <h2 class="text-xl font-semibold">📈 Recent Trades</h2>
-            <div class="text-sm text-gray-400">Last 10 trades</div>
-          </div>
-          
-          {#if trades.length > 0}
-            <div class="space-y-3">
-              {#each trades as trade}
-                <div class="flex items-center justify-between p-3 bg-white/5 rounded-lg">
-                  <div class="flex items-center gap-3">
-                    <span class="text-lg">{getTypeIcon(trade.target_type)}</span>
-                    <div>
-                      <div class="font-medium">{trade.target_name}</div>
-                      <div class="text-xs text-gray-400">
-                        {formatDateTime(trade.timestamp)}
+    {:else}
+      <!-- Trade History -->
+      <div class="card">
+        <h2 class="text-xl font-semibold mb-4">📋 Recent Trades</h2>
+        
+        {#if trades && trades.length > 0}
+          <div class="overflow-x-auto">
+            <table class="table w-full">
+              <thead>
+                <tr class="border-gray-700">
+                  <th class="text-left">Date</th>
+                  <th class="text-left">Target</th>
+                  <th class="text-center">Type</th>
+                  <th class="text-right">Stake Amount</th>
+                  <th class="text-right">Entry Score</th>
+                  <th class="text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each trades as trade}
+                  <tr class="border-gray-700/50">
+                    <td class="py-3">
+                      <div class="text-sm">{formatDate(trade.timestamp)}</div>
+                    </td>
+                    <td class="py-3">
+                      <div class="flex items-center gap-2">
+                        <span>{getTypeIcon(trade.target_type)}</span>
+                        <span class="font-medium">{trade.target_name}</span>
                       </div>
-                    </div>
-                  </div>
-                  
-                  <div class="text-center">
-                    <div class="text-sm font-medium {trade.trade_type === 'buy' ? 'text-emerald-400' : 'text-red-400'}">
-                      {trade.trade_type.toUpperCase()}
-                    </div>
-                    <div class="text-xs text-gray-400">
-                      {formatNumber(trade.shares)} shares
-                    </div>
-                  </div>
-                  
-                  <div class="text-right">
-                    <div class="font-medium">{formatCurrency(trade.price_per_share)}</div>
-                    <div class="text-xs text-gray-400">per share</div>
-                  </div>
-                  
-                  <div class="text-right">
-                    <div class="font-medium {trade.trade_type === 'buy' ? 'text-red-400' : 'text-emerald-400'}">
-                      {trade.trade_type === 'buy' ? '-' : '+'}{formatCurrency(trade.total_amount)}
-                    </div>
-                    <div class="text-xs text-gray-400">total</div>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <div class="text-center py-8 text-gray-400">
-              <div class="text-3xl mb-2">📈</div>
-              <p>No trades yet. <a href="/browse" class="text-blue-400 hover:text-blue-300">Start trading!</a></p>
-            </div>
-          {/if}
-        </div>
-      {:else}
-        <!-- Portfolio Analytics -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <!-- Performance Summary -->
-          <div class="card">
-            <h2 class="text-lg font-semibold mb-4">📊 Performance Summary</h2>
-            <div class="space-y-3">
-              <div class="flex justify-between">
-                <span class="text-gray-400">Starting Balance:</span>
-                <span class="font-medium">$1,000.00</span>
-              </div>
-              <div class="flex justify-between">
-                <span class="text-gray-400">Current Total Value:</span>
-                <span class="font-medium">{formatCurrency(portfolio?.total_value || 0)}</span>
-              </div>
-              <div class="flex justify-between">
-                <span class="text-gray-400">Total Return:</span>
-                <span class="font-medium {overallPerformance === 'positive' ? 'text-emerald-400' : overallPerformance === 'negative' ? 'text-red-400' : 'text-gray-400'}">
-                  {portfolio?.total_pnl !== undefined ? 
-                    (portfolio.total_pnl >= 0 ? '+' : '') + formatCurrency(portfolio.total_pnl) : 
-                    '$0.00'}
-                </span>
-              </div>
-              <div class="flex justify-between">
-                <span class="text-gray-400">Total Return %:</span>
-                <span class="font-medium {overallPerformance === 'positive' ? 'text-emerald-400' : overallPerformance === 'negative' ? 'text-red-400' : 'text-gray-400'}">
-                  {portfolio?.total_pnl_percent !== undefined ? 
-                    (portfolio.total_pnl_percent >= 0 ? '+' : '') + formatNumber(portfolio.total_pnl_percent) + '%' : 
-                    '0.00%'}
-                </span>
-              </div>
-            </div>
+                    </td>
+                    <td class="py-3 text-center">
+                      <span class="px-2 py-1 rounded-full text-xs font-medium {
+                        trade.trade_type.includes('buy') ? 'bg-emerald-500/20 text-emerald-400' : 
+                        'bg-red-500/20 text-red-400'
+                      }">
+                        {trade.trade_type.includes('buy') ? '📈 Long' : '📉 Close'}
+                      </span>
+                    </td>
+                    <td class="py-3 text-right">
+                      <div class="font-medium">{formatCurrency(trade.stake_amount)}</div>
+                    </td>
+                    <td class="py-3 text-right">
+                      <div class="font-medium">{formatNumber(trade.attention_score_at_entry)}</div>
+                    </td>
+                    <td class="py-3 text-right">
+                      <span class="text-xs px-2 py-1 rounded-full bg-blue-500/20 text-blue-400">
+                        {trade.outcome || 'Active'}
+                      </span>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
           </div>
-
-          <!-- Quick Actions -->
-          <div class="card">
-            <h2 class="text-lg font-semibold mb-4">⚡ Quick Actions</h2>
-            <div class="space-y-3">
-              <a href="/browse" class="btn btn-primary w-full">
-                🔍 Browse Targets
-              </a>
-              <a href="/tournaments" class="btn btn-secondary w-full">
-                🏆 Join Tournaments
-              </a>
-              <button class="btn btn-secondary w-full" on:click={() => showTrades = true}>
-                📈 View Trade History
-              </button>
-              <a href="/dashboard" class="btn btn-secondary w-full">
-                📊 Dashboard
-              </a>
-            </div>
+        {:else}
+          <div class="text-center py-12 text-gray-400">
+            <div class="text-6xl mb-4">📋</div>
+            <h3 class="text-xl font-semibold mb-2">No trades yet</h3>
+            <p class="mb-4">Start making some trades to see your history</p>
+            <a href="/browse" class="btn btn-primary">
+              Start Trading
+            </a>
           </div>
-        </div>
-      {/if}
+        {/if}
+      </div>
     {/if}
-  </div>
+  {/if}
 </div>
+
+<style>
+  .table {
+    @apply w-full;
+  }
+
+  .table th {
+    @apply py-3 px-4 text-sm font-medium text-gray-300 border-b;
+  }
+
+  .table td {
+    @apply px-4 border-b;
+  }
+
+  .alert {
+    @apply flex items-center justify-between p-4 rounded-lg;
+  }
+
+  .alert-error {
+    @apply bg-red-500/10 border border-red-500/20 text-red-400;
+  }
+</style>

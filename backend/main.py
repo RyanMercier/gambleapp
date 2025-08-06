@@ -601,23 +601,36 @@ async def seed_historical_data_for_target(target_id: int, search_term: str):
         db.close()
 
 @app.get("/targets")
-def get_targets(skip: int = 0, limit: int = 20, db: Session = Depends(get_db)):
-    """Get all available attention targets"""
-    targets = db.query(AttentionTarget).filter(
-        AttentionTarget.is_active == True
-    ).offset(skip).limit(limit).all()
+def get_targets(
+    target_type: Optional[str] = Query(None),
+    limit: Optional[int] = Query(50),
+    db: Session = Depends(get_db)
+):
+    """Get attention targets with frontend-compatible format"""
+    query = db.query(AttentionTarget).filter(AttentionTarget.is_active == True)
     
-    return [
-        {
+    if target_type:
+        try:
+            target_type_enum = TargetType(target_type.lower())
+            query = query.filter(AttentionTarget.type == target_type_enum)
+        except ValueError:
+            pass  # Invalid target type, ignore filter
+    
+    targets = query.order_by(AttentionTarget.current_attention_score.desc()).limit(limit).all()
+    
+    result = []
+    for target in targets:
+        result.append({
             "id": target.id,
             "name": target.name,
             "type": target.type.value,
             "search_term": target.search_term,
+            "description": target.description,
             "current_attention_score": float(target.current_attention_score),
-            "last_updated": target.last_updated
-        }
-        for target in targets
-    ]
+            "last_updated": target.last_updated.isoformat() if target.last_updated else None
+        })
+    
+    return result
 
 @app.get("/targets/{target_id}")
 def get_target_detail(target_id: int, db: Session = Depends(get_db)):
@@ -781,13 +794,14 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
 # Trading endpoints
 @app.post("/trade")
 def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Execute an attention trade"""
+    """Execute an attention trade with proper frontend compatibility"""
     target = db.query(AttentionTarget).filter(AttentionTarget.id == trade.target_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
     
-    # For attention trading, we use a simplified model
-    trade_amount = Decimal(str(abs(trade.shares) * 10))  # Simple pricing model
+    # Convert frontend "shares" to backend "stake_amount"
+    # Frontend sends shares, we convert to dollar amount staked
+    trade_amount = Decimal(str(abs(trade.shares) * 10))  # Simple pricing model: 1 share = $10 stake
     
     if trade.trade_type == "buy":
         if current_user.balance < trade_amount:
@@ -802,7 +816,7 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
         ).first()
         
         if portfolio:
-            # Update existing position
+            # Update existing position - weighted average entry score
             total_stakes = portfolio.attention_stakes + trade_amount
             portfolio.average_entry_score = (
                 (portfolio.attention_stakes * portfolio.average_entry_score + 
@@ -828,10 +842,13 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
         if not portfolio or portfolio.attention_stakes < trade_amount:
             raise HTTPException(status_code=400, detail="Insufficient position")
         
-        # Calculate P&L
-        pnl = trade_amount * (target.current_attention_score - portfolio.average_entry_score) / 100
+        # Calculate P&L based on attention score difference
+        score_ratio = target.current_attention_score / portfolio.average_entry_score
+        pnl = trade_amount * (score_ratio - 1)
+        
         current_user.balance += trade_amount + pnl
         
+        # Reduce or close position
         portfolio.attention_stakes -= trade_amount
         if portfolio.attention_stakes <= 0:
             db.delete(portfolio)
@@ -850,49 +867,91 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
     
     return {
         "message": "Trade executed successfully",
-        "balance": float(current_user.balance)
+        "balance": float(current_user.balance),
+        "total_amount": float(trade_amount),
+        "pnl": float(pnl) if trade.trade_type == "sell" else None
     }
+
+# Add this function to handle "flatten" operations
+@app.post("/trade/flatten/{target_id}")
+def flatten_position(
+    target_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Flatten (close) entire position in a target"""
+    portfolio = db.query(Portfolio).filter(
+        Portfolio.user_id == current_user.id,
+        Portfolio.target_id == target_id
+    ).first()
+    
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="No position found for this target")
+    
+    # Create a sell trade for the entire position
+    trade_request = TradeRequest(
+        target_id=target_id,
+        trade_type="sell",
+        shares=float(portfolio.attention_stakes) / 10  # Convert stakes back to shares
+    )
+    
+    return execute_trade(trade_request, current_user, db)
 
 @app.get("/portfolio")
 def get_portfolio(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Get user's current portfolio"""
+    """Get user's current portfolio with frontend-compatible format"""
     positions = db.query(Portfolio).filter(
         Portfolio.user_id == current_user.id
     ).all()
     
     portfolio_data = []
     total_value = 0
+    total_pnl = 0
     
     for position in positions:
         target = position.target
-        current_value = position.attention_stakes * (target.current_attention_score / position.average_entry_score)
-        pnl = current_value - position.attention_stakes
-        pnl_percent = (pnl / position.attention_stakes) * 100 if position.attention_stakes > 0 else 0
+        
+        # Calculate current value based on attention score ratio
+        score_ratio = target.current_attention_score / position.average_entry_score if position.average_entry_score > 0 else 1
+        current_value = float(position.attention_stakes) * score_ratio
+        pnl = current_value - float(position.attention_stakes)
+        pnl_percent = (pnl / float(position.attention_stakes)) * 100 if position.attention_stakes > 0 else 0
         
         portfolio_data.append({
             "target": {
                 "id": target.id,
                 "name": target.name,
-                "current_attention_score": float(target.current_attention_score)
+                "type": target.type.value,
+                "current_attention_score": float(target.current_attention_score),
+                # Legacy fields for frontend compatibility
+                "attention_score": float(target.current_attention_score),
+                "current_price": float(target.current_attention_score) / 10  # Convert to "price per share"
             },
+            "target_id": target.id,
             "attention_stakes": float(position.attention_stakes),
             "average_entry_score": float(position.average_entry_score),
-            "current_value": float(current_value),
-            "pnl": float(pnl),
-            "pnl_percent": float(pnl_percent)
+            "current_value": current_value,
+            "pnl": pnl,
+            "pnl_percent": pnl_percent,
+            # Legacy fields for frontend compatibility
+            "shares_owned": float(position.attention_stakes) / 10,  # Convert stakes to "shares"
+            "average_price": float(position.average_entry_score) / 10,
+            "position_value": current_value
         })
         total_value += current_value
+        total_pnl += pnl
     
     return {
         "positions": portfolio_data,
-        "total_value": float(total_value),
+        "total_value": total_value,
+        "total_pnl": total_pnl,
         "cash_balance": float(current_user.balance),
-        "total_portfolio_value": float(total_value + current_user.balance)
+        "total_portfolio_value": total_value + float(current_user.balance)
     }
 
 @app.get("/trades/my")
 def get_my_trades(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Get user's trade history"""
+    """Get user's trade history with frontend-compatible format"""
     trades = db.query(Trade).filter(
         Trade.user_id == current_user.id
     ).order_by(Trade.timestamp.desc()).limit(50).all()
@@ -905,13 +964,15 @@ def get_my_trades(current_user: User = Depends(get_current_user), db: Session = 
             "target_id": target.id,
             "target_name": target.name,
             "target_type": target.type.value,
-            "trade_type": trade.trade_type,
+            "trade_type": trade.trade_type.replace("stake_", ""),  # Convert "stake_buy" to "buy"
             "stake_amount": float(trade.stake_amount),
             "attention_score_at_entry": float(trade.attention_score_at_entry),
-            "timestamp": trade.timestamp
+            "timestamp": trade.timestamp.isoformat(),
+            "outcome": trade.outcome,
+            "pnl": float(trade.pnl) if trade.pnl else 0.0
         })
     
-    return result
+    return {"trades": result}
 
 # Tournament endpoints
 @app.get("/tournaments")

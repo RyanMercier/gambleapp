@@ -14,10 +14,13 @@
   let submitting = false;
   let error = '';
 
-  $: totalCost = target ? shares * target.current_price : 0;
-  $: canAfford = $user && totalCost <= $user.balance;
-  $: hasShares = currentPosition && currentPosition.shares_owned > 0;
-  $: maxSellShares = currentPosition ? currentPosition.shares_owned : 0;
+  // Updated to use attention-based calculations
+  $: stakeCost = target ? shares * (target.current_attention_score || target.attention_score || 50) / 10 : 0;
+  $: canAfford = $user && stakeCost <= $user.balance;
+  $: hasPosition = currentPosition && currentPosition.attention_stakes > 0;
+  $: maxSellAmount = currentPosition ? currentPosition.attention_stakes : 0;
+  // Convert attention_stakes back to "shares" for UI consistency (shares = stakes / 10)
+  $: maxSellShares = maxSellAmount / 10;
 
   async function executeTrade() {
     if (!target || submitting) return;
@@ -26,7 +29,7 @@
 
     // Validation
     if (shares <= 0) {
-      error = 'Please enter a valid number of shares';
+      error = 'Please enter a valid amount';
       return;
     }
 
@@ -36,7 +39,7 @@
     }
 
     if (tradeType === 'sell' && shares > maxSellShares) {
-      error = 'Insufficient shares to sell';
+      error = 'Insufficient position to sell';
       return;
     }
 
@@ -48,7 +51,7 @@
         body: JSON.stringify({
           target_id: target.id,
           trade_type: tradeType,
-          shares: shares
+          shares: shares // Backend converts this to stake_amount
         })
       });
 
@@ -60,7 +63,7 @@
       dispatch('trade-success', {
         type: tradeType,
         shares: shares,
-        total: result.total_amount
+        stake_cost: stakeCost
       });
 
       // Reset form
@@ -75,14 +78,14 @@
   }
 
   function formatCurrency(amount) {
-    return `$${parseFloat(amount).toFixed(2)}`;
+    return `$${parseFloat(amount || 0).toFixed(2)}`;
   }
 
   function formatNumber(num) {
     return new Intl.NumberFormat('en-US', {
       maximumFractionDigits: 2,
       minimumFractionDigits: 2
-    }).format(num);
+    }).format(num || 0);
   }
 </script>
 
@@ -91,8 +94,8 @@
     <h3 class="{compact ? 'text-lg' : 'text-xl'} font-semibold">Quick Trade</h3>
     {#if target}
       <div class="text-right">
-        <div class="text-sm text-gray-400">Current Price</div>
-        <div class="font-bold text-emerald-400">{formatCurrency(target.current_price)}</div>
+        <div class="text-sm text-gray-400">Attention Score</div>
+        <div class="font-bold text-emerald-400">{formatNumber(target.current_attention_score || target.attention_score || 50)}</div>
       </div>
     {/if}
   </div>
@@ -105,25 +108,25 @@
         on:click={() => tradeType = 'buy'}
         disabled={submitting}
       >
-        📈 Buy
+        📈 Long
       </button>
       <button
         class="btn {tradeType === 'sell' ? 'btn-danger' : 'btn-secondary'} {compact ? 'text-sm py-2' : ''}"
         on:click={() => tradeType = 'sell'}
-        disabled={!hasShares || submitting}
+        disabled={!hasPosition || submitting}
       >
-        📉 Sell
+        📉 Short
       </button>
     </div>
 
     <!-- Current Position (if any) -->
-    {#if currentPosition && currentPosition.shares_owned > 0 && !compact}
+    {#if currentPosition && currentPosition.attention_stakes > 0 && !compact}
       <div class="mb-4 p-3 bg-indigo-500/10 rounded-lg">
         <div class="text-sm font-medium mb-1">Your Position</div>
         <div class="flex justify-between text-xs text-gray-300">
-          <span>{formatNumber(currentPosition.shares_owned)} shares</span>
-          <span class="{currentPosition.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">
-            {currentPosition.pnl >= 0 ? '+' : ''}{formatCurrency(currentPosition.pnl)}
+          <span>Stake: ${formatNumber(currentPosition.attention_stakes)}</span>
+          <span class="{(currentPosition.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}">
+            {(currentPosition.pnl || 0) >= 0 ? '+' : ''}${formatNumber(currentPosition.pnl || 0)}
           </span>
         </div>
       </div>
@@ -131,11 +134,11 @@
 
     <!-- Trade Form -->
     <form on:submit|preventDefault={executeTrade} class="space-y-3">
-      <!-- Shares Input -->
+      <!-- Amount Input -->
       <div>
         <label class="block text-sm font-medium text-gray-300 mb-1">
-          Shares
-          {#if tradeType === 'sell' && hasShares}
+          Amount to {tradeType === 'buy' ? 'Stake' : 'Withdraw'}
+          {#if tradeType === 'sell' && hasPosition}
             <span class="text-gray-400">(Max: {formatNumber(maxSellShares)})</span>
           {/if}
         </label>
@@ -158,7 +161,7 @@
           <div class="flex justify-between text-sm mb-1">
             <span>Total {tradeType === 'buy' ? 'Cost' : 'Proceeds'}:</span>
             <span class="font-medium {tradeType === 'buy' ? 'text-red-400' : 'text-emerald-400'}">
-              {tradeType === 'buy' ? '-' : '+'}{formatCurrency(totalCost)}
+              {tradeType === 'buy' ? '-' : '+'}${formatNumber(stakeCost)}
             </span>
           </div>
           
@@ -166,7 +169,7 @@
             <div class="flex justify-between text-xs text-gray-400">
               <span>Available:</span>
               <span class="{canAfford ? '' : 'text-red-400'}">
-                {formatCurrency($user?.balance || 0)}
+                ${formatNumber($user?.balance || 0)}
               </span>
             </div>
           {/if}
@@ -192,9 +195,24 @@
             Processing...
           </div>
         {:else}
-          {tradeType === 'buy' ? 'Buy Shares' : 'Sell Shares'}
+          {tradeType === 'buy' ? 'Open Long Position' : 'Close Position'}
         {/if}
       </button>
+
+      <!-- Add Flatten Button if user has position -->
+      {#if hasPosition && !compact}
+        <button
+          type="button"
+          class="btn btn-warning w-full mt-2"
+          on:click={() => {
+            shares = maxSellShares;
+            tradeType = 'sell';
+          }}
+          disabled={submitting}
+        >
+          🔄 Flatten Position
+        </button>
+      {/if}
     </form>
   {:else}
     <div class="text-center py-8 text-gray-400">
