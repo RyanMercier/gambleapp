@@ -1,4 +1,3 @@
-# backend/models.py
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, Enum, Text, Numeric
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -9,9 +8,11 @@ Base = declarative_base()
 
 class TargetType(enum.Enum):
     POLITICIAN = "politician"
-    BILLIONAIRE = "billionaire"
+    CELEBRITY = "celebrity"  # Combines billionaires + content creators + entertainers
     COUNTRY = "country"
-    STOCK = "stock"
+    GAME = "game"  # New gaming category
+    STOCK = "stock"  # Traditional stocks
+    CRYPTO = "crypto"  # Cryptocurrencies
 
 class TournamentDuration(enum.Enum):
     DAILY = "daily"
@@ -134,21 +135,19 @@ class Tournament(Base):
     __tablename__ = "tournaments"
     
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), nullable=False)
-    description = Column(Text)
-    
-    # Tournament config
+    name = Column(String(200), nullable=False)
+    target_type = Column(Enum(TargetType), nullable=False)
     duration = Column(Enum(TournamentDuration), nullable=False)
-    entry_fee = Column(Numeric(10, 2), nullable=False)
-    max_participants = Column(Integer, default=1000)
-    prize_pool = Column(Numeric(12, 2), default=0.0)
     
-    # Tournament timing
+    entry_fee = Column(Numeric(10, 2), nullable=False)
+    prize_pool = Column(Numeric(10, 2), default=0.0)
+    participant_count = Column(Integer, default=0)
+    
     start_date = Column(DateTime, nullable=False)
     end_date = Column(DateTime, nullable=False)
+    is_active = Column(Boolean, default=True)
+    is_finished = Column(Boolean, default=False)
     
-    # Status
-    status = Column(String(20), default="upcoming")  # upcoming, active, completed, cancelled
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
@@ -161,15 +160,16 @@ class TournamentEntry(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
     
-    # Entry details
-    entry_fee_paid = Column(Numeric(10, 2), nullable=False)
-    joined_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Performance tracking
-    starting_score = Column(Numeric(10, 2), default=0.0)
-    final_score = Column(Numeric(10, 2), default=0.0)
+    entry_fee = Column(Numeric(10, 2), nullable=False)
+    starting_balance = Column(Numeric(10, 2), default=1000.0)
+    final_balance = Column(Numeric(10, 2))
+    final_pnl = Column(Numeric(10, 2), default=0.0)
     rank = Column(Integer)
-    prize_won = Column(Numeric(10, 2), default=0.0)
+    
+    payout_amount = Column(Numeric(10, 2), default=0.0)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime)
     
     # Relationships
     user = relationship("User", back_populates="tournament_entries")

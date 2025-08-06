@@ -12,6 +12,7 @@ import asyncio
 import logging
 import json
 from seed_data import store_timeframe_data_with_real_timestamps
+from csv_loader import csv_loader
 
 from database import SessionLocal, engine
 from models import (
@@ -168,129 +169,297 @@ def get_me(current_user: User = Depends(get_current_user)):
     }
 
 # Search and Target Management
-# backend/main.py - Conservative search endpoint and seeding to prevent 429 errors
+@app.get("/api/autocomplete/{category}")
+async def get_autocomplete_suggestions(
+    category: str, 
+    q: str = Query("", min_length=0), 
+    limit: int = Query(10, ge=1, le=50)
+):
+    """Get autocomplete suggestions for a specific category"""
+    valid_categories = ['politicians', 'celebrities', 'countries', 'games', 'stocks', 'crypto']
+    
+    if category not in valid_categories:
+        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {valid_categories}")
+    
+    # Return empty if query too short
+    if len(q.strip()) < 2:
+        return {
+            "success": True,
+            "category": category,
+            "query": q,
+            "suggestions": [],
+            "total": 0,
+            "message": "Query too short (minimum 2 characters)"
+        }
+    
+    suggestions = csv_loader.search_in_category(category, q, limit)
+    
+    return {
+        "success": True,
+        "category": category,
+        "query": q,
+        "suggestions": suggestions,
+        "total": len(suggestions)
+    }
 
+@app.get("/api/autocomplete")  
+async def search_all_categories(
+    q: str = Query("", min_length=0), 
+    limit: int = Query(20, ge=1, le=100)
+):
+    """Search across all categories"""
+    if len(q.strip()) < 2:
+        return {
+            "success": False, 
+            "message": "Query too short (minimum 2 characters)",
+            "query": q,
+            "results": {}
+        }
+    
+    results = csv_loader.search_all_categories(q, limit)
+    
+    return {
+        "success": True,
+        "query": q,
+        "results": results,
+        "total_categories": len(results),
+        "total_results": sum(len(items) for items in results.values())
+    }
+
+@app.get("/api/categories/{category}")
+async def get_category_list(
+    category: str, 
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0)
+):
+    """Get full list of items in a category"""
+    valid_categories = ['politicians', 'celebrities', 'countries', 'games', 'stocks', 'crypto']
+    
+    if category not in valid_categories:
+        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {valid_categories}")
+    
+    all_data = csv_loader.get_category_data(category)
+    total = len(all_data)
+    
+    # Apply pagination
+    data = all_data[offset:offset + limit]
+    
+    return {
+        "success": True,
+        "category": category,
+        "data": data,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + limit < total
+    }
+
+@app.get("/api/categories")
+async def get_all_categories():
+    """Get list of all categories with their counts"""
+    stats = csv_loader.get_category_stats()
+    categories = []
+    
+    category_info = {
+        'politicians': {'label': '🏛️ Politicians', 'icon': '🏛️'},
+        'celebrities': {'label': '🌟 Celebrities', 'icon': '🌟'},
+        'countries': {'label': '🌍 Countries', 'icon': '🌍'},
+        'games': {'label': '🎮 Games', 'icon': '🎮'},
+        'stocks': {'label': '📈 Stocks', 'icon': '📈'},
+        'crypto': {'label': '₿ Crypto', 'icon': '₿'}
+    }
+    
+    for category, count in stats.items():
+        info = category_info.get(category, {'label': category.title(), 'icon': '📊'})
+        categories.append({
+            'value': category,
+            'label': info['label'],
+            'icon': info['icon'],
+            'count': count
+        })
+    
+    return {
+        "success": True,
+        "categories": categories,
+        "total_categories": len(categories)
+    }
+
+@app.get("/api/suggestions/{category}")
+async def get_random_suggestions(
+    category: str,
+    count: int = Query(10, ge=1, le=50)
+):
+    """Get random suggestions from a category for discovery"""
+    valid_categories = ['politicians', 'celebrities', 'countries', 'games', 'stocks', 'crypto']
+    
+    if category not in valid_categories:
+        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {valid_categories}")
+    
+    suggestions = csv_loader.get_random_suggestions(category, count)
+    
+    return {
+        "success": True,
+        "category": category,
+        "suggestions": suggestions,
+        "count": len(suggestions)
+    }
+
+@app.post("/admin/reload-csv-data")
+async def reload_csv_data(current_user: User = Depends(get_current_user)):
+    """Reload CSV data from files (admin only)"""
+    # You might want to add admin role checking here
+    try:
+        csv_loader.reload_data()
+        stats = csv_loader.get_category_stats()
+        
+        return {
+            "success": True,
+            "message": "CSV data reloaded successfully",
+            "stats": stats
+        }
+    except Exception as e:
+        logger.error(f"Failed to reload CSV data: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to reload CSV data: {str(e)}")
+
+# Update your existing search endpoint to use CSV validation
 @app.post("/search")
 async def search_attention_target(
-    request: SearchRequest, 
-    background_tasks: BackgroundTasks,
+    search: SearchRequest, 
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Search for attention targets and create them with conservative seeding"""
-    query = request.query.strip()
-    target_type = request.target_type
+    """Search for attention targets - now validates against CSV data"""
     
-    if not query:
-        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    # Validate that the search term exists in our CSV data
+    category_map = {
+        'politician': 'politicians',
+        'celebrity': 'celebrities', 
+        'country': 'countries',
+        'game': 'games',
+        'stock': 'stocks',
+        'crypto': 'crypto'
+    }
     
-    logger.info(f"🔍 Search request: '{query}' (type: {target_type})")
+    csv_category = category_map.get(search.target_type)
+    if not csv_category:
+        raise HTTPException(status_code=400, detail="Invalid target type")
     
-    # Check if target already exists
+    # Search in CSV to validate the target exists
+    csv_matches = csv_loader.search_in_category(csv_category, search.query, limit=5)
+    
+    if not csv_matches:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"'{search.query}' not found in {search.target_type} list. Only pre-approved targets can be traded."
+        )
+    
+    # Find the best match
+    best_match = None
+    for match in csv_matches:
+        if match['name'].lower() == search.query.lower():
+            best_match = match
+            break
+    
+    if not best_match:
+        best_match = csv_matches[0]  # Use first match if no exact match
+    
+    # Check if target already exists in database
     existing_target = db.query(AttentionTarget).filter(
-        AttentionTarget.search_term.ilike(f"%{query}%")
+        AttentionTarget.search_term.ilike(f"%{best_match['search_term']}%")
     ).first()
     
     if existing_target:
-        logger.info(f"✅ Found existing target: {existing_target.name}")
         return {
-            "id": existing_target.id,
-            "name": existing_target.name,
-            "type": existing_target.type.value,
-            "search_term": existing_target.search_term,
-            "current_attention_score": float(existing_target.current_attention_score),
-            "created": False,
-            "message": f"Found existing target: {existing_target.name}"
+            "success": True,
+            "message": f"Found existing target: {existing_target.name}",
+            "target": {
+                "id": existing_target.id,
+                "name": existing_target.name,
+                "type": existing_target.type.value,
+                "search_term": existing_target.search_term,
+                "current_attention_score": float(existing_target.current_attention_score)
+            },
+            "csv_match": best_match
         }
     
+    # Create new target using CSV data
     try:
-        # Create new target with Google Trends data
         async with GoogleTrendsService(websocket_manager=manager) as service:
-            logger.info(f"🔍 Creating new target for: {query}")
+            trends_data = await service.get_google_trends_data(best_match['search_term'])
             
-            # FIX: Only get current score initially - don't seed all timeframes immediately
-            current_data = await service.get_google_trends_data(query, timeframe="now 1-d")
+            if not trends_data.get('success'):
+                raise HTTPException(status_code=500, detail="Failed to get Google Trends data")
             
-            if not current_data.get('success'):
-                error_msg = current_data.get('error', 'Unknown error')
-                if 'Rate limited' in error_msg or 'Circuit breaker' in error_msg:
-                    raise HTTPException(
-                        status_code=429,
-                        detail=f"Google Trends is rate limiting requests. Please try again in a few minutes."
-                    )
-                else:
-                    raise HTTPException(
-                        status_code=404, 
-                        detail=f"No Google Trends data found for '{query}'. Try a more popular search term."
-                    )
-            
-            current_score = current_data["attention_score"]
-            logger.info(f"✅ Got trend score for {query}: {current_score}")
-            
-            # Map target type
-            type_mapping = {
-                "politician": TargetType.POLITICIAN,
-                "billionaire": TargetType.BILLIONAIRE,
-                "stock": TargetType.STOCK,
-                "country": TargetType.COUNTRY,
-                "stock": TargetType.STOCK
+            # Map CSV category back to enum
+            type_map = {
+                'politicians': TargetType.POLITICIAN,
+                'celebrities': TargetType.CELEBRITY,
+                'countries': TargetType.COUNTRY,
+                'games': TargetType.GAME,
+                'stocks': TargetType.STOCK,
+                'crypto': TargetType.CRYPTO
             }
             
-            # Create the target
-            target = AttentionTarget(
-                name=query.title(),
-                type=type_mapping.get(target_type, TargetType.POLITICIAN),
-                search_term=query,
-                current_attention_score=Decimal(str(current_score)),
-                description=f"Google Trends attention score for {query}"
+            new_target = AttentionTarget(
+                name=best_match['name'],
+                type=type_map[csv_category],
+                search_term=best_match['search_term'],
+                current_attention_score=Decimal(str(trends_data['attention_score']))
             )
             
-            db.add(target)
+            db.add(new_target)
             db.commit()
-            db.refresh(target)
+            db.refresh(new_target)
             
-            logger.info(f"✅ Created target {query} with current score: {current_score}")
-            
-            # FIX: Conservative seeding approach - spread out over time
-            # Start with immediate seeding of just 1-day data (already have it)
-            if current_data.get('timeline') and current_data.get('timeline_timestamps'):
+            # Store initial history point with immediate 1-day data
+            if trends_data.get('timeline') and trends_data.get('timeline_timestamps'):
                 try:
                     from seed_data import store_timeframe_data_with_real_timestamps
                     await store_timeframe_data_with_real_timestamps(
-                        target, current_data, "1d", "now 1-d", db
+                        new_target, trends_data, "1d", "now 1-d", db
                     )
                     logger.info("✅ Stored initial 1-day data immediately")
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to store initial 1d data: {e}")
+            else:
+                # Store single point if no timeline data
+                history = AttentionHistory(
+                    target_id=new_target.id,
+                    attention_score=new_target.current_attention_score,
+                    data_source="google_trends",
+                    timeframe_used="now 1-d"
+                )
+                db.add(history)
+                db.commit()
             
-            # FIX: Gradual background seeding - spread over 30+ minutes
-            background_tasks.add_task(
-                gradual_historical_seeding, 
-                target.id, 
-                query,
-                start_delay_minutes=2  # Wait 2 minutes before starting
+            # Start gradual background seeding for remaining timeframes
+            # This spreads the seeding over 30+ minutes to avoid rate limits
+            asyncio.create_task(
+                gradual_historical_seeding(
+                    new_target.id, 
+                    best_match['search_term'],
+                    start_delay_minutes=2  # Wait 2 minutes before starting
+                )
             )
             
             return {
-                "id": target.id,
-                "name": target.name,
-                "type": target.type.value,
-                "search_term": target.search_term,
-                "current_attention_score": float(target.current_attention_score),
-                "created": True,
-                "message": f"Created {target.name}! More historical data will load gradually over the next 30 minutes to avoid rate limits."
+                "success": True,
+                "message": f"Created new target: {new_target.name}. More historical data will load gradually over the next 30 minutes to avoid rate limits.",
+                "target": {
+                    "id": new_target.id,
+                    "name": new_target.name,
+                    "type": new_target.type.value,
+                    "search_term": new_target.search_term,
+                    "current_attention_score": float(new_target.current_attention_score),
+                },
+                "csv_match": best_match,
+                "trends_data": trends_data
             }
             
-    except HTTPException:
-        # Re-raise HTTP exceptions (429, 404)
-        raise
     except Exception as e:
-        logger.error(f"❌ Search failed for '{query}': {e}")
+        logger.error(f"Error creating target from CSV match: {e}")
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}"
-        )
-
+        raise HTTPException(status_code=500, detail=f"Failed to create target: {str(e)}")
 
 async def gradual_historical_seeding(target_id: int, search_term: str, start_delay_minutes: int = 2):
     """Gradual background seeding to avoid rate limits - spread over 30+ minutes"""
@@ -456,7 +625,6 @@ def get_target_detail(target_id: int, db: Session = Depends(get_db)):
         "name": target.name,
         "type": target.type.value,
         "search_term": target.search_term,
-        "description": target.description,
         "current_attention_score": float(target.current_attention_score),
         "last_updated": target.last_updated,
         "created_at": target.created_at
@@ -756,7 +924,6 @@ def get_tournaments(db: Session = Depends(get_db)):
         result.append({
             "id": tournament.id,
             "name": tournament.name,
-            "description": tournament.description,
             "duration": tournament.duration.value,
             "entry_fee": float(tournament.entry_fee),
             "max_participants": tournament.max_participants,

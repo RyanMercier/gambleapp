@@ -1,5 +1,5 @@
 """
-Complete seed_data.py - Uses actual Google Trends timestamps
+Complete seed_data.py - Uses actual Google Trends timestamps with updated target types
 """
 
 import asyncio
@@ -14,14 +14,16 @@ from google_trends_service import GoogleTrendsService
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Sample targets
+# Updated sample targets with new category names
 SAMPLE_TARGETS = [
     {"name": "Donald Trump", "type": "politician", "search_term": "donald trump"},
-    {"name": "Elon Musk", "type": "billionaire", "search_term": "elon musk"},
-    {"name": "Bitcoin", "type": "stock", "search_term": "bitcoin"},
+    {"name": "Elon Musk", "type": "celebrity", "search_term": "elon musk"},  # Changed from billionaire to celebrity
+    {"name": "Bitcoin", "type": "crypto", "search_term": "bitcoin"},  # Changed from stock to crypto
     {"name": "Tesla", "type": "stock", "search_term": "tesla"},
     {"name": "Joe Biden", "type": "politician", "search_term": "joe biden"},
     {"name": "Apple", "type": "stock", "search_term": "apple stock"},
+    {"name": "United States", "type": "country", "search_term": "united states"},
+    {"name": "Fortnite", "type": "game", "search_term": "fortnite"},
 ]
 
 async def create_target_with_data(target_data: dict, service: GoogleTrendsService, db: SessionLocal) -> bool:
@@ -45,12 +47,19 @@ async def create_target_with_data(target_data: dict, service: GoogleTrendsServic
         
         current_score = current_data.get("attention_score", 50.0)
         
-        # Create target
+        # Updated type mapping to match new enum values
         type_mapping = {
             "politician": TargetType.POLITICIAN,
-            "billionaire": TargetType.BILLIONAIRE,
-            "stock": TargetType.STOCK
+            "celebrity": TargetType.CELEBRITY,  # Updated from billionaire
+            "country": TargetType.COUNTRY,
+            "game": TargetType.GAME,  # New
+            "stock": TargetType.STOCK,
+            "crypto": TargetType.CRYPTO  # New
         }
+        
+        if target_type not in type_mapping:
+            logger.error(f"❌ Invalid target type: {target_type}")
+            return False
         
         target = AttentionTarget(
             name=name,
@@ -64,7 +73,7 @@ async def create_target_with_data(target_data: dict, service: GoogleTrendsServic
         db.commit()
         db.refresh(target)
         
-        logger.info(f"✅ Created target: {name} (Score: {current_score:.1f})")
+        logger.info(f"✅ Created target: {name} (Score: {current_score:.1f}, Type: {target_type})")
         
         # Standard Google Trends timeframes with proper data source names
         timeframes = [
@@ -188,7 +197,7 @@ async def seed_sample_targets():
         async with GoogleTrendsService() as service:
             for i, target_data in enumerate(SAMPLE_TARGETS):
                 try:
-                    logger.info(f"📈 [{i+1}/{len(SAMPLE_TARGETS)}] Processing: {target_data['name']}")
+                    logger.info(f"📈 [{i+1}/{len(SAMPLE_TARGETS)}] Processing: {target_data['name']} ({target_data['type']})")
                     
                     success = await create_target_with_data(target_data, service, db)
                     if success:

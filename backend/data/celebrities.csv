@@ -1,0 +1,92 @@
+name,search_term,description,icon,external_id
+Elon Musk,Elon Musk,CEO of Tesla and SpaceX,🚀,elon_musk
+Jeff Bezos,Jeff Bezos,Founder of Amazon,📦,jeff_bezos
+Bill Gates,Bill Gates,Microsoft founder and philanthropist,💻,bill_gates
+Mark Zuckerberg,Mark Zuckerberg,Meta CEO,📱,mark_zuckerberg
+Larry Page,Larry Page,Google co-founder,🔍,larry_page
+Sergey Brin,Sergey Brin,Google co-founder,🔍,sergey_brin
+Tim Cook,Tim Cook,Apple CEO,🍎,tim_cook
+Satya Nadella,Satya Nadella,Microsoft CEO,💻,satya_nadella
+Warren Buffett,Warren Buffett,Berkshire Hathaway CEO,💰,warren_buffett
+Charlie Munger,Charlie Munger,Berkshire Hathaway Vice Chairman,💰,charlie_munger
+Jamie Dimon,Jamie Dimon,JPMorgan Chase CEO,🏦,jamie_dimon
+Ray Dalio,Ray Dalio,Bridgewater founder,💰,ray_dalio
+Michael Bloomberg,Michael Bloomberg,Bloomberg founder,📊,michael_bloomberg
+Taylor Swift,Taylor Swift,Pop superstar,🎵,taylor_swift
+Kanye West,Kanye West,Rapper and entrepreneur,🎤,kanye_west
+Jay-Z,Jay-Z,Rapper and business mogul,🎤,jay_z
+Beyoncé,Beyoncé,R&B superstar,🎵,beyonce
+Drake,Drake,Canadian rapper,🎤,drake
+Ariana Grande,Ariana Grande,Pop star,🎵,ariana_grande
+Justin Bieber,Justin Bieber,Pop star,🎵,justin_bieber
+Billie Eilish,Billie Eilish,Pop sensation,🎵,billie_eilish
+The Weeknd,The Weeknd,R&B artist,🎵,the_weeknd
+Bad Bunny,Bad Bunny,Reggaeton superstar,🎵,bad_bunny
+Dwayne Johnson,The Rock,Actor and former wrestler,🎬,dwayne_johnson
+Tom Cruise,Tom Cruise,Action movie star,🎬,tom_cruise
+Leonardo DiCaprio,Leonardo DiCaprio,Academy Award winner,🎬,leonardo_dicaprio
+Will Smith,Will Smith,Actor and rapper,🎬,will_smith
+Robert Downey Jr,Robert Downey Jr,Iron Man actor,🎬,robert_downey_jr
+Ryan Reynolds,Ryan Reynolds,Deadpool actor,🎬,ryan_reynolds
+Jennifer Lawrence,Jennifer Lawrence,Academy Award winner,🎬,jennifer_lawrence
+Margot Robbie,Margot Robbie,Australian actress,🎬,margot_robbie
+Chris Hemsworth,Chris Hemsworth,Thor actor,🎬,chris_hemsworth
+Scarlett Johansson,Scarlett Johansson,Black Widow actress,🎬,scarlett_johansson
+Kim Kardashian,Kim Kardashian,Reality TV star and entrepreneur,⭐,kim_kardashian
+Kylie Jenner,Kylie Jenner,Reality TV star and businesswoman,⭐,kylie_jenner
+Khloe Kardashian,Khloe Kardashian,Reality TV star,⭐,khloe_kardashian
+Kourtney Kardashian,Kourtney Kardashian,Reality TV star,⭐,kourtney_kardashian
+Kris Jenner,Kris Jenner,Kardashian family matriarch,⭐,kris_jenner
+Oprah Winfrey,Oprah Winfrey,Media mogul and philanthropist,📺,oprah_winfrey
+Howard Stern,Howard Stern,Radio personality,📻,howard_stern
+Joe Rogan,Joe Rogan,Podcast host,🎙️,joe_rogan
+Ellen DeGeneres,Ellen DeGeneres,TV host and comedian,📺,ellen_degeneres
+LeBron James,LeBron James,NBA superstar,🏀,lebron_james
+Tom Brady,Tom Brady,NFL legend,🏈,tom_brady
+Cristiano Ronaldo,Cristiano Ronaldo,Soccer superstar,⚽,cristiano_ronaldo
+Lionel Messi,Lionel Messi,Soccer legend,⚽,lionel_messi
+Serena Williams,Serena Williams,Tennis champion,🎾,serena_williams
+Tiger Woods,Tiger Woods,Golf legend,⛳,tiger_woods
+Andrew Tate,Andrew Tate,Controversial influencer,⚡,andrew_tate
+Jordan Peterson,Jordan Peterson,Psychologist and author,📚,jordan_peterson
+PewDiePie,PewDiePie,Felix - Gaming's biggest individual creator,👑,UC-lHJZR3Gqxm24_Vd_AJ5Yw
+Markiplier,Markiplier,Mark - Horror gaming specialist,😱,UC7_YxT-KID8kRbqZo7MyscQ
+Jacksepticeye,Jacksepticeye,Sean - Energetic Irish gamer,☘️,UCYzPXprvl5Y-Sf0g4vX-m6g
+DanTDM,DanTDM,Dan - Minecraft and gaming content,💎,UCS5Oz6CHmeoF7vSad0qqXfw
+VanossGaming,VanossGaming,Evan - Gaming comedy group,🦉,UCKqH_9mk1waLgBiL2vT5b9g
+CoryxKenshin,CoryxKenshin,Cory - Horror gaming and reactions,👻,UCE_--R1P5-kfBzHTca0dsnw
+Ninja,Ninja,Tyler - Fortnite streaming legend,🥷,UCAW-NpUFkMyCNrvRSSGIvDQ
+Pokimane,Pokimane,Imane - Top female streamer,🎮,UCVhfFXNY0z7Aap08H8-6toA
+Valkyrae,Valkyrae,Rae - Gaming and lifestyle content,⚡,UChBBlfeFNk9jU9SUxl3d2Mg
+Dream,Dream,Clay - Minecraft speedrunner,😷,UCfM3zsQsOnfWNUppiycmBuw
+GeorgeNotFound,GeorgeNotFound,George - Dream SMP member,🥽,UCrPseYLGpNygVi34QpGNqpA
+MrBeast,MrBeast,Jimmy - Philanthropic content king,💰,UCX6OQ3DkcsbYNE6H8uQQuVA
+MKBHD,MKBHD,Marques - Tech review authority,📱,UCBJycsmduvYEL83R_U4JriQ
+Linus Tech Tips,Linus Tech Tips,Linus - Tech education and reviews,💻,UCXuqSBlHAE6Xw-yeJA0Tunw
+Veritasium,Veritasium,Derek - Science education,🔬,UCHnyfMqiRRG1u-2MsSQLbXA
+Kurzgesagt,Kurzgesagt,In a Nutshell - Animated science,🌌,UCsXVk37bltHxD1rDPwtNM8Q
+Logan Paul,Logan Paul,Logan - Controversial content creator,🥊,UCG8rbF3g2AMX70yOd8vqIZg
+Jake Paul,Jake Paul,Jake - Boxing YouTuber,🥊,UCcwVQwTNR7aE_d4dQzK1bxg
+David Dobrik,David Dobrik,David - Vlog squad leader,📹,UCmh5gdwCx6lN7gEC20leNVA
+Emma Chamberlain,Emma Chamberlain,Emma - Lifestyle vlogger,☕,UC78cxCAcp7JfQPgKxYdyGrg
+James Charles,James Charles,James - Beauty influencer,💋,UCucot-Zp428OwzazG0e7hzg
+Jeffree Star,Jeffree Star,Jeffree - Beauty and controversy,💄,UCkvK_5omS-42Ovgah8KRKtg
+T-Series,T-Series,Indian music and film production,🎵,UCq-Fj5jknLsUf-MWSy4_brA
+Dude Perfect,Dude Perfect,Sports trick shots and comedy,🎯,UCRijo3ddMTht_IHyNSNXpNQ
+Good Mythical Morning,Good Mythical Morning,Rhett & Link - Daily talk show,🌅,UC4PooiX37Pld1T8J5SYT-SQ
+Rubius,ElRubius,Spanish gaming and entertainment,🇪🇸,UCXazif75cJAqc7fwFWL8qnQ
+Felipe Neto,Felipe Neto,Brazilian entertainment,🇧🇷,UCV306eHqgo0LvBf3Mh36AHg
+Casey Neistat,Casey Neistat,Casey - Filmmaking and lifestyle,🎬,UCtinbF-Q-fVthA0qrFQTgXQ
+Peter McKinnon,Peter McKinnon,Peter - Photography and filmmaking,📸,UC7T8roVtC_3afWKTOGtLlBA
+Ryan's World,Ryan's World,Ryan - Kids toy reviews,🧸,UChGJGhZ9SOOHvBB0Y4DOO_w
+Blippi,Blippi,Stevin - Educational kids content,🎪,UCeVFVLwNNtOyNjS6h8b-oAw
+SSSniperWolf,SSSniperWolf,Lia - Gaming and reaction content,🎮,UCpB959t8iPrxQWj7G6n0ctQ
+moistcr1tikal,penguinz0,Charlie - Gaming and commentary,🐧,UCq6VFHwMzcMXbuKyG7SQYIg
+H3 Podcast,H3 Podcast,Ethan & Hila - Commentary podcast,🎙️,UCLtREJY21xRfCuEKvdki1Kw
+NikkieTutorials,NikkieTutorials,Nikkie - Beauty tutorials,💄,UCzTKskwIc_4jAUTa7MhKqNQ
+Tati,Tati,Tati - Beauty reviews and drama,💄,UC94LPgNsw6y-2SBpBfqPxTw
+Binging with Babish,Binging with Babish,Andrew - Cooking show recreations,👨‍🍳,UCJHA_jMfCvEnv-3kRjTCQXw
+Bon Appétit,Bon Appétit,Professional cooking content,👨‍🍳,UCbpMy2Fg74eHla2IfkIDGRA
+Athlean-X,Athlean-X,Jeff - Science-based fitness,💪,UCe0TLA0EsQbE-MjuHXevj2A
+Sam Sulek,Sam Sulek,body builder,💪,UCe0TLA0EsQbE-MjuHXevj2A
+Jeff Nippard,Jeff Nippard,Jeff - Science-based fitness,💪,UCe0TLA0EsQbE-MjuHXevj2A

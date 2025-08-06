@@ -1,0 +1,33 @@
+name,search_term,description,icon,coingecko_id
+Bitcoin,Bitcoin cryptocurrency,The original cryptocurrency - Digital gold,₿,bitcoin
+Ethereum,Ethereum cryptocurrency,Smart contract platform - DeFi leader,♦️,ethereum
+Tether,Tether cryptocurrency,Stablecoin pegged to USD,🟢,tether
+BNB,BNB cryptocurrency,Binance exchange token,🟡,binancecoin
+XRP,XRP cryptocurrency,Ripple payment protocol token,🌊,ripple
+Solana,Solana cryptocurrency,High-speed blockchain platform,🌅,solana
+USDC,USDC cryptocurrency,USD Coin stablecoin,🔵,usd-coin
+Cardano,Cardano cryptocurrency,Proof-of-stake blockchain,🔷,cardano
+Dogecoin,Dogecoin cryptocurrency,Meme cryptocurrency - Elon's favorite,🐕,dogecoin
+Avalanche,Avalanche cryptocurrency,Decentralized platform for DeFi,🏔️,avalanche-2
+Polygon,Polygon cryptocurrency,Ethereum scaling solution,🟣,matic-network
+Chainlink,Chainlink cryptocurrency,Decentralized oracle network,🔗,chainlink
+Uniswap,Uniswap cryptocurrency,Decentralized exchange token,🦄,uniswap
+Wrapped Bitcoin,Wrapped Bitcoin cryptocurrency,Bitcoin on Ethereum,₿,wrapped-bitcoin
+Dai,Dai cryptocurrency,Decentralized stablecoin,🟠,dai
+Polkadot,Polkadot cryptocurrency,Multi-chain interoperability,🔴,polkadot
+Near Protocol,Near Protocol cryptocurrency,Developer-friendly blockchain,🔺,near
+Cosmos,Cosmos cryptocurrency,Internet of blockchains,⚛️,cosmos
+Fantom,Fantom cryptocurrency,High-performance smart contracts,👻,fantom
+Shiba Inu,Shiba Inu cryptocurrency,Dogecoin competitor meme coin,🐶,shiba-inu
+Pepe,Pepe cryptocurrency,Frog meme coin,🐸,pepe
+Floki,Floki cryptocurrency,Elon-inspired meme coin,🐕,floki
+OKB,OKB cryptocurrency,OKX exchange token,🔵,okb
+LEO Token,LEO Token cryptocurrency,Bitfinex exchange token,🦁,leo-token
+Monero,Monero cryptocurrency,Privacy-focused cryptocurrency,🅜,monero
+Zcash,Zcash cryptocurrency,Shielded transactions,🛡️,zcash
+ApeCoin,ApeCoin cryptocurrency,Bored Ape Yacht Club token,🐵,apecoin
+The Sandbox,The Sandbox cryptocurrency,Virtual world and gaming,🏖️,the-sandbox
+Axie Infinity,Axie Infinity cryptocurrency,Play-to-earn gaming,🎮,axie-infinity
+Bitcoin Cash,Bitcoin Cash cryptocurrency,Bitcoin fork with larger blocks,₿,bitcoin-cash
+Litecoin,Litecoin cryptocurrency,Silver to Bitcoin's gold,🥈,litecoin
+Ethereum Classic,Ethereum Classic cryptocurrency,Original Ethereum blockchain,♦️,ethereum-classic

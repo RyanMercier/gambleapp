@@ -1,0 +1,41 @@
+name,search_term,description,icon,congress_id
+Donald Trump,Donald Trump,45th President of the United States,🇺🇸,trump_donald
+Joe Biden,Joe Biden,46th President of the United States,🇺🇸,biden_joseph
+Barack Obama,Barack Obama,44th President of the United States,🇺🇸,obama_barack
+Bill Clinton,Bill Clinton,42nd President of the United States,🇺🇸,clinton_bill
+George W Bush,George W Bush,43rd President of the United States,🇺🇸,bush_george_w
+Ron DeSantis,Ron DeSantis,Governor of Florida,🏛️,desantis_ron
+Nikki Haley,Nikki Haley,Former UN Ambassador,🏛️,haley_nikki
+Vivek Ramaswamy,Vivek Ramaswamy,Entrepreneur and Presidential candidate,🏛️,ramaswamy_vivek
+Chris Christie,Chris Christie,Former New Jersey Governor,🏛️,christie_chris
+Tim Scott,Tim Scott,Senator from South Carolina,🏛️,scott_tim
+Chuck Schumer,Chuck Schumer,Senate Majority Leader,🏛️,schumer_chuck
+Mitch McConnell,Mitch McConnell,Senate Minority Leader,🏛️,mcconnell_mitch
+Bernie Sanders,Bernie Sanders,Senator from Vermont,🏛️,sanders_bernie
+Elizabeth Warren,Elizabeth Warren,Senator from Massachusetts,🏛️,warren_elizabeth
+Ted Cruz,Ted Cruz,Senator from Texas,🏛️,cruz_ted
+Marco Rubio,Marco Rubio,Senator from Florida,🏛️,rubio_marco
+Josh Hawley,Josh Hawley,Senator from Missouri,🏛️,hawley_josh
+Tom Cotton,Tom Cotton,Senator from Arkansas,🏛️,cotton_tom
+Kyrsten Sinema,Kyrsten Sinema,Former Senator from Arizona,🏛️,sinema_kyrsten
+Joe Manchin,Joe Manchin,Senator from West Virginia,🏛️,manchin_joe
+Nancy Pelosi,Nancy Pelosi,Former Speaker of the House,🏛️,pelosi_nancy
+Kevin McCarthy,Kevin McCarthy,Former Speaker of the House,🏛️,mccarthy_kevin
+Alexandria Ocasio-Cortez,AOC,Representative from New York,🏛️,ocasio_cortez_alexandria
+Marjorie Taylor Greene,Marjorie Taylor Greene,Representative from Georgia,🏛️,greene_marjorie
+Matt Gaetz,Matt Gaetz,Representative from Florida,🏛️,gaetz_matt
+Jim Jordan,Jim Jordan,Representative from Ohio,🏛️,jordan_jim
+Ilhan Omar,Ilhan Omar,Representative from Minnesota,🏛️,omar_ilhan
+Rashida Tlaib,Rashida Tlaib,Representative from Michigan,🏛️,tlaib_rashida
+Lauren Boebert,Lauren Boebert,Representative from Colorado,🏛️,boebert_lauren
+Adam Schiff,Adam Schiff,Representative from California,🏛️,schiff_adam
+Gavin Newsom,Gavin Newsom,Governor of California,🏛️,newsom_gavin
+Greg Abbott,Greg Abbott,Governor of Texas,🏛️,abbott_greg
+Gretchen Whitmer,Gretchen Whitmer,Governor of Michigan,🏛️,whitmer_gretchen
+Glenn Youngkin,Glenn Youngkin,Governor of Virginia,🏛️,youngkin_glenn
+Kristi Noem,Kristi Noem,Governor of South Dakota,🏛️,noem_kristi
+Kamala Harris,Kamala Harris,Vice President of the United States,🇺🇸,harris_kamala
+Mike Pence,Mike Pence,Former Vice President,🏛️,pence_mike
+Hillary Clinton,Hillary Clinton,Former Secretary of State,🏛️,clinton_hillary
+Anthony Fauci,Anthony Fauci,Former NIAID Director,🏛️,fauci_anthony
+Liz Cheney,Liz Cheney,Former Representative from Wyoming,🏛️,cheney_liz
