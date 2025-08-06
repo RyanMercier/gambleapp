@@ -1,10 +1,30 @@
-<!-- frontend/svelte-gambling/src/routes/browse/+page.svelte -->
 <script>
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { user } from '$lib/stores';
+  import apiFetch from '$lib/api';
   import AttentionChart from '$lib/AttentionChart.svelte';
 
-  // Updated target types for new categories
-  let targetTypes = [
+  let searchQuery = '';
+  let targetType = 'politician';
+  let searchResults = null;
+  let loading = false;
+  let featuredTargets = [];
+  let selectedTarget = null;
+
+  // Chart-specific variables
+  let showChart = false;
+  let chartTargetId = null;
+  let chartTargetName = '';
+
+  let showAutocomplete = false;
+  let autocompleteResults = [];
+  let autocompleteLoading = false;
+  let debounceTimer = null;
+  let selectedIndex = -1;
+
+  // Updated target types to match backend
+  const targetTypes = [
     { value: 'politician', label: '🏛️ Politicians', icon: '🏛️' },
     { value: 'celebrity', label: '🌟 Celebrities', icon: '🌟' },
     { value: 'country', label: '🌍 Countries', icon: '🌍' },
@@ -13,42 +33,23 @@
     { value: 'crypto', label: '₿ Crypto', icon: '₿' }
   ];
 
-  // State variables
-  let searchQuery = '';
-  let targetType = 'politician';
-  let loading = false;
-  let searchResults = null;
-  let popularTargets = [];
-  let selectedTarget = null;
-  
-  // Chart state
-  let showChart = false;
-  let chartTargetId = null;
-  let chartTargetName = '';
-  
-  // Autocomplete state
-  let autocompleteResults = [];
-  let showAutocomplete = false;
-  let autocompleteLoading = false;
-  let selectedIndex = -1;
-  
-  // Debounce timer for autocomplete
-  let debounceTimer;
-
   onMount(async () => {
-    await loadPopularTargets();
+    if (!$user) {
+      goto('/login');
+      return;
+    }
+
+    await loadFeaturedTargets();
   });
 
-  async function loadPopularTargets() {
+  async function loadFeaturedTargets() {
     try {
-      const response = await fetch('/api/targets?limit=12');
-      const data = await response.json();
-      
-      if (Array.isArray(data)) {
-        popularTargets = data;
-      }
+      const targets = await apiFetch('/targets?limit=12');
+      featuredTargets = Array.isArray(targets) ? targets : [];
+      console.log('Loaded featured targets:', featuredTargets.length);
     } catch (error) {
-      console.error('Failed to load popular targets:', error);
+      console.error('Failed to load featured targets:', error);
+      featuredTargets = [];
     }
   }
 
@@ -85,10 +86,7 @@
       };
       
       const backendCategory = categoryMap[targetType];
-      const response = await fetch(
-        `/api/autocomplete/${backendCategory}?q=${encodeURIComponent(searchQuery)}&limit=10`
-      );
-      const data = await response.json();
+      const data = await apiFetch(`/api/autocomplete/${backendCategory}?q=${encodeURIComponent(searchQuery)}&limit=10`);
       
       if (data.success) {
         autocompleteResults = data.suggestions;
@@ -156,47 +154,41 @@
       alert('Please enter a search term');
       return;
     }
-
+    
     loading = true;
+    showChart = false;
+    chartTargetId = null;
     showAutocomplete = false;
 
     try {
-      const response = await fetch('/api/search', {
+      const data = await apiFetch('/api/search', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify({
-          query: searchQuery,
+          query: searchQuery.trim(),
           target_type: targetType
         })
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Search failed');
-      }
-
-      const data = await response.json();
+      console.log('Search results:', data);
       
+      // Handle the response format from the updated backend
       if (data.success && data.target) {
         searchResults = {
           id: data.target.id,
-          query: searchQuery,
+          query: searchQuery.trim(),
           current_attention_score: data.target.current_attention_score,
           name: data.target.name,
           type: data.target.type,
           description: data.target.description
         };
 
-        // Show chart
+        // Show chart with the target
         chartTargetId = data.target.id;
         chartTargetName = data.target.name;
         showChart = true;
 
       } else {
-        throw new Error(data.message || 'No data found');
+        throw new Error(data.message || 'Search failed');
       }
 
     } catch (error) {
@@ -207,8 +199,22 @@
     }
   }
 
-  async function selectPopularTarget(target) {
-    console.log('Selecting popular target:', target);
+  // Update category when changed
+  function handleCategoryChange(newCategory) {
+    targetType = newCategory;
+    // Clear autocomplete when category changes
+    showAutocomplete = false;
+    autocompleteResults = [];
+    selectedIndex = -1;
+    
+    // Trigger new autocomplete search if there's a query
+    if (searchQuery.length >= 2) {
+      handleSearchInput();
+    }
+  }
+
+  async function selectFeaturedTarget(target) {
+    console.log('Selecting featured target:', target);
     
     selectedTarget = target;
     searchQuery = target.name;
@@ -242,20 +248,6 @@
   function getTypeIcon(type) {
     const typeObj = targetTypes.find(t => t.value === type);
     return typeObj ? typeObj.icon : '📊';
-  }
-
-  // Update category when changed
-  function handleCategoryChange(newCategory) {
-    targetType = newCategory;
-    // Clear autocomplete when category changes
-    showAutocomplete = false;
-    autocompleteResults = [];
-    selectedIndex = -1;
-    
-    // Trigger new autocomplete search if there's a query
-    if (searchQuery.length >= 2) {
-      handleSearchInput();
-    }
   }
 </script>
 
@@ -305,7 +297,7 @@
                 on:keydown={handleKeydown}
                 on:blur={handleClickOutside}
                 placeholder="Start typing to search..."
-                class="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                class="input w-full"
                 disabled={loading}
               />
               
@@ -353,81 +345,143 @@
             💡 Only pre-approved targets can be traded to prevent manipulation
           </p>
         </div>
-
-        <!-- Search Results -->
-        {#if searchResults}
-          <div class="mt-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-            <div class="flex items-center justify-between mb-2">
-              <h3 class="text-lg font-semibold">{searchResults.name}</h3>
-              <span class="text-2xl font-bold text-blue-400">
-                {formatNumber(searchResults.current_attention_score)}
-              </span>
-            </div>
-            <p class="text-gray-400 text-sm mb-4">{searchResults.description}</p>
-            
-            <!-- Trading Buttons -->
-            <!-- <TradingButtons 
-              targetId={searchResults.id}
-              targetName={searchResults.name}
-              currentScore={searchResults.current_attention_score}
-            /> -->
-          </div>
-        {/if}
       </form>
     </div>
 
-    <!-- Popular Targets -->
-    {#if popularTargets.length > 0}
+    <!-- Search Results / Chart Section -->
+    {#if searchResults}
       <div class="card mb-8">
-        <h2 class="text-xl font-semibold mb-4">🔥 Popular Targets</h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {#each popularTargets as target}
-            <button
-              class="p-4 border border-white/20 rounded-lg hover:border-blue-500/50 transition-colors text-left group"
-              on:click={() => selectPopularTarget(target)}
-            >
-              <div class="flex items-center justify-between mb-2">
-                <div class="flex items-center gap-2">
-                  <span class="text-xl">{getTypeIcon(target.type)}</span>
-                  <span class="font-medium group-hover:text-blue-400 transition-colors">
-                    {target.name}
-                  </span>
-                </div>
-                <span class="text-lg font-bold text-blue-400">
-                  {formatNumber(target.current_attention_score)}
-                </span>
-              </div>
-              <div class="text-xs text-gray-500 uppercase">{target.type}</div>
+        <div class="flex items-center justify-between mb-6">
+          <div>
+            <h2 class="text-xl font-semibold">{searchResults.name}</h2>
+            <p class="text-gray-400">Current Attention Score: {formatNumber(searchResults.current_attention_score)}</p>
+            {#if searchResults.description}
+              <p class="text-sm text-gray-500 mt-1">{searchResults.description}</p>
+            {/if}
+          </div>
+          <div class="flex gap-2">
+            <button class="btn btn-success" on:click={() => goto(`/trade/${searchResults.id}?type=buy`)}>
+              📈 Buy Shares
             </button>
-          {/each}
+            <button class="btn btn-danger" on:click={() => goto(`/trade/${searchResults.id}?type=sell`)}>
+              📉 Sell Shares
+            </button>
+          </div>
         </div>
+        
+        <!-- Chart Component -->
+        {#if showChart && chartTargetId}
+          <div class="mt-4">
+            <AttentionChart 
+              targetId={chartTargetId} 
+              targetName={chartTargetName}
+              height="400px"
+              showTimeframeSelector={true}
+              autoUpdate={true}
+            />
+          </div>
+        {:else}
+          <div class="h-96 bg-gray-800/50 rounded-lg p-4 flex items-center justify-center">
+            <div class="text-center text-gray-400">
+              <div class="text-4xl mb-2">📊</div>
+              <div>Chart will appear here when you select a target</div>
+            </div>
+          </div>
+        {/if}
       </div>
     {/if}
 
-    <!-- Chart Section -->
-    {#if showChart && chartTargetId}
-      <div class="card">
-        <h2 class="text-xl font-semibold mb-4">📈 {chartTargetName} - Attention Trends</h2>
-        <AttentionChart targetId={chartTargetId} />
+    <!-- Featured Targets Section -->
+    <div class="card">
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-xl font-semibold">🌟 Featured Targets</h2>
+        <div class="flex items-center gap-2">
+          <button 
+            class="btn btn-secondary text-sm"
+            on:click={loadFeaturedTargets}
+            disabled={loading}
+          >
+            🔄 Refresh
+          </button>
+          <p class="text-sm text-gray-400">Top targets by attention score</p>
+        </div>
       </div>
-    {/if}
+      
+      {#if featuredTargets.length > 0}
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {#each featuredTargets as target}
+            <button
+              class="p-4 bg-white/5 rounded-lg hover:bg-white/10 transition-all text-left group border border-white/10 hover:border-blue-500/30"
+              on:click={() => selectFeaturedTarget(target)}
+            >
+              <div class="flex items-center gap-3 mb-2">
+                <span class="text-2xl">{getTypeIcon(target.type)}</span>
+                <div class="flex-1 min-w-0">
+                  <h3 class="font-medium truncate group-hover:text-blue-400 transition-colors">
+                    {target.name}
+                  </h3>
+                  <p class="text-xs text-gray-400 capitalize">{target.type}</p>
+                </div>
+              </div>
+              
+              <div class="space-y-1">
+                <div class="flex justify-between text-sm">
+                  <span class="text-gray-400">Attention:</span>
+                  <span class="font-medium text-blue-400">{formatNumber(target.current_attention_score)}</span>
+                </div>
+                <div class="flex justify-between text-sm">
+                  <span class="text-gray-400">Updated:</span>
+                  <span class="font-medium text-green-400">
+                    {target.last_updated ? new Date(target.last_updated).toLocaleDateString() : 'Never'}
+                  </span>
+                </div>
+              </div>
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <div class="text-center py-12">
+          <div class="text-6xl mb-4">🌟</div>
+          <h3 class="text-xl font-semibold mb-2">No featured targets yet</h3>
+          <p class="text-gray-400 mb-4">Featured targets will appear here once data is loaded</p>
+          <button 
+            class="btn btn-primary"
+            on:click={loadFeaturedTargets}
+          >
+            Load Featured Targets
+          </button>
+        </div>
+      {/if}
+    </div>
   </div>
 </div>
 
 <style>
+  .card {
+    @apply bg-gray-900/50 backdrop-blur-sm border border-gray-800 rounded-xl p-6 shadow-xl;
+  }
+  
   .btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200;
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-opacity-50;
   }
   
   .btn-primary {
-    @apply bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   
   .btn-secondary {
-    @apply bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white;
+    @apply bg-gray-700 text-gray-300 hover:bg-gray-600 focus:ring-gray-500 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   
-  .card {
-    @apply bg-white/5 backdrop-blur-sm border border-white/10 rounded-xl p-6;
+  .btn-success {
+    @apply bg-emerald-600 text-white hover:bg-emerald-700 focus:ring-emerald-500;
+  }
+  
+  .btn-danger {
+    @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+  }
+  
+  .input {
+    @apply bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent;
   }
 </style>

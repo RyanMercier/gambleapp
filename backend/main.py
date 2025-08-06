@@ -322,7 +322,7 @@ async def reload_csv_data(current_user: User = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Failed to reload CSV data: {str(e)}")
 
 # Update your existing search endpoint to use CSV validation
-@app.post("/search")
+@app.post("/api/search")
 async def search_attention_target(
     search: SearchRequest, 
     current_user: User = Depends(get_current_user),
