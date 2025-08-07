@@ -802,10 +802,13 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
     # Convert frontend "shares" to backend "stake_amount"
     # Frontend sends shares, we convert to dollar amount staked
     trade_amount = Decimal(str(abs(trade.shares) * 10))  # Simple pricing model: 1 share = $10 stake
+    pnl = Decimal('0.0')  # Initialize PnL
+    
+    logger.info(f"💱 Trade request: {trade.trade_type} {trade.shares} shares of {target.name} (${trade_amount})")
     
     if trade.trade_type == "buy":
         if current_user.balance < trade_amount:
-            raise HTTPException(status_code=400, detail="Insufficient balance")
+            raise HTTPException(status_code=400, detail=f"Insufficient balance. Need ${trade_amount}, have ${current_user.balance}")
         
         current_user.balance -= trade_amount
         
@@ -823,6 +826,7 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
                  trade_amount * target.current_attention_score) / total_stakes
             )
             portfolio.attention_stakes = total_stakes
+            logger.info(f"📈 Updated position: ${total_stakes} @ {portfolio.average_entry_score}")
         else:
             # Create new position
             portfolio = Portfolio(
@@ -832,6 +836,7 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
                 average_entry_score=target.current_attention_score
             )
             db.add(portfolio)
+            logger.info(f"🆕 New position: ${trade_amount} @ {target.current_attention_score}")
     
     elif trade.trade_type == "sell":
         portfolio = db.query(Portfolio).filter(
@@ -839,19 +844,29 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
             Portfolio.target_id == target.id
         ).first()
         
-        if not portfolio or portfolio.attention_stakes < trade_amount:
-            raise HTTPException(status_code=400, detail="Insufficient position")
+        if not portfolio:
+            raise HTTPException(status_code=400, detail="No position found for this target")
+        
+        if portfolio.attention_stakes < trade_amount:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Insufficient position. You have ${portfolio.attention_stakes}, trying to sell ${trade_amount}"
+            )
         
         # Calculate P&L based on attention score difference
-        score_ratio = target.current_attention_score / portfolio.average_entry_score
+        score_ratio = target.current_attention_score / portfolio.average_entry_score if portfolio.average_entry_score > 0 else 1
         pnl = trade_amount * (score_ratio - 1)
         
         current_user.balance += trade_amount + pnl
         
         # Reduce or close position
         portfolio.attention_stakes -= trade_amount
+        
+        logger.info(f"📉 Selling ${trade_amount}, P&L: ${pnl}, remaining stake: ${portfolio.attention_stakes}")
+        
         if portfolio.attention_stakes <= 0:
             db.delete(portfolio)
+            logger.info("🗑️ Position closed completely")
     
     # Record the trade
     new_trade = Trade(
@@ -859,17 +874,23 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
         target_id=target.id,
         trade_type=f"stake_{trade.trade_type}",
         stake_amount=trade_amount,
-        attention_score_at_entry=target.current_attention_score
+        attention_score_at_entry=target.current_attention_score,
+        pnl=pnl if trade.trade_type == "sell" else Decimal('0.0')
     )
     db.add(new_trade)
     
     db.commit()
     
+    logger.info(f"✅ Trade executed successfully. New balance: ${current_user.balance}")
+    
     return {
         "message": "Trade executed successfully",
         "balance": float(current_user.balance),
         "total_amount": float(trade_amount),
-        "pnl": float(pnl) if trade.trade_type == "sell" else None
+        "pnl": float(pnl) if trade.trade_type == "sell" else None,
+        "trade_id": new_trade.id,
+        "target_name": target.name,
+        "attention_score": float(target.current_attention_score)
     }
 
 # Add this function to handle "flatten" operations
@@ -1003,45 +1024,66 @@ def get_tournaments(db: Session = Depends(get_db)):
     
     return result
 
+# Add tournament join endpoint
 @app.post("/tournaments/join")
-def join_tournament(entry: TournamentEntryRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def join_tournament(
+    entry_request: TournamentEntryRequest, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
     """Join a tournament"""
-    tournament = db.query(Tournament).filter(Tournament.id == entry.tournament_id).first()
+    tournament = db.query(Tournament).filter(
+        Tournament.id == entry_request.tournament_id,
+        Tournament.is_active == True,
+        Tournament.is_finished == False
+    ).first()
+    
     if not tournament:
-        raise HTTPException(status_code=404, detail="Tournament not found")
+        raise HTTPException(status_code=404, detail="Tournament not found or not active")
     
-    if tournament.status not in ["upcoming", "active"]:
-        raise HTTPException(status_code=400, detail="Tournament not available for entry")
-    
-    # Check if already joined
-    existing = db.query(TournamentEntry).filter(
+    # Check if user already joined
+    existing_entry = db.query(TournamentEntry).filter(
         TournamentEntry.user_id == current_user.id,
         TournamentEntry.tournament_id == tournament.id
     ).first()
     
-    if existing:
+    if existing_entry:
         raise HTTPException(status_code=400, detail="Already joined this tournament")
     
+    # Check if user has enough balance for entry fee
     if current_user.balance < tournament.entry_fee:
-        raise HTTPException(status_code=400, detail="Insufficient balance for entry fee")
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Insufficient balance for entry fee: ${tournament.entry_fee}"
+        )
     
-    # Deduct entry fee
-    current_user.balance -= tournament.entry_fee
+    # Deduct entry fee (only if not free)
+    if tournament.entry_fee > 0:
+        current_user.balance -= tournament.entry_fee
+        tournament.prize_pool += tournament.entry_fee * Decimal('0.9')  # 90% to prize pool
     
     # Create tournament entry
-    tournament_entry = TournamentEntry(
+    entry = TournamentEntry(
         user_id=current_user.id,
         tournament_id=tournament.id,
-        entry_fee_paid=tournament.entry_fee
+        entry_fee=tournament.entry_fee,
+        starting_balance=Decimal('1000.00')  # Everyone starts with same virtual balance
     )
-    db.add(tournament_entry)
     
-    # Update prize pool (90% goes to prize pool, 10% platform fee)
-    tournament.prize_pool += tournament.entry_fee * Decimal("0.9")
+    db.add(entry)
+    tournament.participant_count += 1
     
     db.commit()
     
-    return {"message": "Successfully joined tournament", "balance": float(current_user.balance)}
+    logger.info(f"🏆 {current_user.username} joined tournament: {tournament.name}")
+    
+    return {
+        "message": f"Successfully joined {tournament.name}",
+        "tournament_id": tournament.id,
+        "entry_fee": float(tournament.entry_fee),
+        "starting_balance": float(entry.starting_balance),
+        "participants": tournament.participant_count
+    }
 
 @app.get("/leaderboard")
 def get_leaderboard(db: Session = Depends(get_db)):
