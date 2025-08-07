@@ -84,13 +84,17 @@ class AttentionHistory(Base):
 
 class Portfolio(Base):
     """
-    Attention-based portfolio tracking (no traditional shares)
+    Attention-based portfolio tracking with long/short positions
     """
     __tablename__ = "portfolios"
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     target_id = Column(Integer, ForeignKey("attention_targets.id"), nullable=False)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=True)  # NEW: Which tournament
+    
+    # Position type: long (bet score goes up) or short (bet score goes down)
+    position_type = Column(String(10), nullable=False, default="long")  # NEW: "long" or "short"
     
     # Attention-based tracking
     attention_stakes = Column(Numeric(10, 2), nullable=False, default=0.0)
@@ -102,35 +106,9 @@ class Portfolio(Base):
     # Relationships
     user = relationship("User", back_populates="portfolios")
     target = relationship("AttentionTarget", back_populates="portfolios")
+    tournament = relationship("Tournament", back_populates="portfolios")
 
-class Trade(Base):
-    """
-    Attention betting/staking instead of traditional trading
-    """
-    __tablename__ = "trades"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    target_id = Column(Integer, ForeignKey("attention_targets.id"), nullable=False)
-    
-    # Trade details - betting on attention direction/levels
-    trade_type = Column(String(20), nullable=False)  # 'stake_up', 'stake_down', 'stake_stable'
-    stake_amount = Column(Numeric(10, 2), nullable=False)  # Amount staked
-    attention_score_at_entry = Column(Numeric(5, 2), nullable=False)  # Score when trade made
-    
-    # Prediction/outcome tracking
-    predicted_direction = Column(String(20))  # 'up', 'down', 'stable'
-    predicted_target_score = Column(Numeric(5, 2))  # What score they're betting on
-    outcome = Column(String(20))  # 'win', 'loss', 'pending'
-    pnl = Column(Numeric(10, 2), default=0.0)  # Profit/loss from this stake
-    
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-    settled_at = Column(DateTime)  # When the outcome was determined
-    
-    # Relationships
-    user = relationship("User", back_populates="trades")
-    target = relationship("AttentionTarget", back_populates="trades")
-
+# Add relationship to Tournament model
 class Tournament(Base):
     __tablename__ = "tournaments"
     
@@ -152,7 +130,9 @@ class Tournament(Base):
     
     # Relationships
     entries = relationship("TournamentEntry", back_populates="tournament")
+    portfolios = relationship("Portfolio", back_populates="tournament")  # NEW
 
+# Updated TournamentEntry with virtual balances
 class TournamentEntry(Base):
     __tablename__ = "tournament_entries"
     
@@ -161,7 +141,8 @@ class TournamentEntry(Base):
     tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=False)
     
     entry_fee = Column(Numeric(10, 2), nullable=False)
-    starting_balance = Column(Numeric(10, 2), default=1000.0)
+    starting_balance = Column(Numeric(10, 2), default=10000.0)  # Everyone gets $10k
+    current_balance = Column(Numeric(10, 2), default=10000.0)   # Updated as they trade
     final_balance = Column(Numeric(10, 2))
     final_pnl = Column(Numeric(10, 2), default=0.0)
     rank = Column(Integer)
@@ -174,3 +155,33 @@ class TournamentEntry(Base):
     # Relationships
     user = relationship("User", back_populates="tournament_entries")
     tournament = relationship("Tournament", back_populates="entries")
+
+# Updated Trade model to include tournament context
+class Trade(Base):
+    """
+    Attention betting/staking with tournament context
+    """
+    __tablename__ = "trades"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    target_id = Column(Integer, ForeignKey("attention_targets.id"), nullable=False)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id"), nullable=True)  # NEW
+    
+    # Trade details
+    trade_type = Column(String(20), nullable=False)  # 'stake_buy' (long), 'stake_sell' (short), 'close_long', 'close_short'
+    position_type = Column(String(10), nullable=False, default="long")  # "long" or "short"
+    stake_amount = Column(Numeric(10, 2), nullable=False)
+    attention_score_at_entry = Column(Numeric(5, 2), nullable=False)
+    
+    # Outcome tracking
+    pnl = Column(Numeric(10, 2), default=0.0)
+    is_closed = Column(Boolean, default=False)
+    
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    closed_at = Column(DateTime)
+    
+    # Relationships
+    user = relationship("User", back_populates="trades")
+    target = relationship("AttentionTarget", back_populates="trades")
+    tournament = relationship("Tournament")  # NEW

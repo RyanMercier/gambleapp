@@ -8,13 +8,18 @@
 
   let authChecked = false;
   let isCheckingAuth = true;
+  let dailyPnL = 0;
+  let tournamentBalances = [];
 
   // Define route patterns
   const publicRoutes = ['/', '/login'];
-  const protectedRoutes = ['/dashboard', '/browse', '/tournaments', '/profile', '/portfolio'];
+  const protectedRoutes = ['/dashboard', '/browse', '/tournaments', '/profile', '/portfolio', '/trade'];
 
   onMount(async () => {
     await checkAuthentication();
+    if (authChecked && $user) {
+      loadUserStats();
+    }
   });
 
   async function checkAuthentication() {
@@ -22,17 +27,12 @@
     const storedUser = localStorage.getItem('user');
     const currentPath = $page.url.pathname;
     
-    // If we have stored credentials, verify they're still valid
     if (token && storedUser) {
       try {
-        // Parse stored user first
         const parsedUser = JSON.parse(storedUser);
         user.set(parsedUser);
         
-        // Verify token is still valid by calling API
         const currentUser = await apiFetch('/auth/me');
-        
-        // Update user data if API call succeeds
         user.set(currentUser);
         localStorage.setItem('user', JSON.stringify(currentUser));
         
@@ -40,27 +40,37 @@
       } catch (error) {
         console.error('❌ Session validation failed:', error);
         
-        // Clear invalid session data
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         user.set(null);
         
-        // Only redirect to login if we're on a protected route
         if (isProtectedRoute(currentPath)) {
-          console.log('🔄 Redirecting to login from protected route');
           goto('/login');
         }
       }
     } else {
-      // No stored session - check if we need to redirect
       if (isProtectedRoute(currentPath)) {
-        console.log('🔄 No session, redirecting to login');
         goto('/login');
       }
     }
     
     authChecked = true;
     isCheckingAuth = false;
+  }
+
+  async function loadUserStats() {
+    try {
+      // Load daily P&L and tournament balances
+      const [dailyData, balancesData] = await Promise.all([
+        apiFetch('/user/daily-pnl').catch(() => ({ daily_pnl: 0 })),
+        apiFetch('/user/tournament-balances').catch(() => ({ tournament_balances: [] }))
+      ]);
+
+      dailyPnL = dailyData.daily_pnl || 0;
+      tournamentBalances = balancesData.tournament_balances || [];
+    } catch (error) {
+      console.error('Failed to load user stats:', error);
+    }
   }
 
   function isProtectedRoute(path) {
@@ -76,6 +86,10 @@
     localStorage.removeItem('user');
     user.set(null);
     goto('/login');
+  }
+
+  function formatCurrency(amount) {
+    return `$${parseFloat(amount || 0).toFixed(2)}`;
   }
 
   // Navigation items
@@ -140,15 +154,24 @@
               {/each}
             </div>
 
-            <!-- User Menu -->
+            <!-- User Menu with Daily P&L -->
             <div class="flex items-center space-x-4">
               {#if $user}
-                <!-- Balance Display -->
+                <!-- Daily P&L Display -->
                 <div class="hidden sm:flex items-center bg-gray-700 rounded-lg px-3 py-2">
-                  <span class="text-emerald-400 font-medium">
-                    ${parseFloat($user.balance || 0).toFixed(2)}
+                  <span class="text-xs text-gray-400 mr-2">Today:</span>
+                  <span class="font-medium {dailyPnL >= 0 ? 'text-emerald-400' : 'text-red-400'}">
+                    {dailyPnL >= 0 ? '+' : ''}{formatCurrency(dailyPnL)}
                   </span>
                 </div>
+
+                <!-- Tournament Balances Dropdown -->
+                {#if tournamentBalances.length > 0}
+                  <div class="hidden lg:flex items-center bg-gray-700 rounded-lg px-3 py-2">
+                    <span class="text-xs text-gray-400 mr-2">Tournaments:</span>
+                    <span class="font-medium text-blue-400">{tournamentBalances.length}</span>
+                  </div>
+                {/if}
 
                 <!-- User Profile & Logout -->
                 <div class="flex items-center space-x-3">
@@ -187,56 +210,24 @@
                 {item.label.replace(/^\S+\s/, '')}
               </a>
             {/each}
+            
+            <!-- Mobile Daily P&L -->
+            {#if $user}
+              <div class="px-3 py-2 text-center bg-gray-700 rounded-md mt-2">
+                <div class="text-xs text-gray-400">Today's P&L</div>
+                <div class="font-medium {dailyPnL >= 0 ? 'text-emerald-400' : 'text-red-400'}">
+                  {dailyPnL >= 0 ? '+' : ''}{formatCurrency(dailyPnL)}
+                </div>
+              </div>
+            {/if}
           </div>
         </div>
       </nav>
     {/if}
 
     <!-- Main Content -->
-    <main class="{showNavigation ? 'pt-0' : ''}">
+    <main class="{showNavigation ? 'pt-0' : 'pt-16'} min-h-screen">
       <slot />
     </main>
-
-    <!-- Global Toast/Notification Area (if needed) -->
-    <div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2">
-      <!-- Toast notifications can be rendered here -->
-    </div>
   </div>
 {/if}
-
-<style>
-  /* Global styles */
-  :global(body) {
-    margin: 0;
-    padding: 0;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background-color: #111827;
-    color: #ffffff;
-  }
-
-  :global(.card) {
-    @apply bg-gray-800 rounded-lg p-6 shadow-xl border border-gray-700;
-  }
-
-  :global(.btn-primary) {
-    @apply bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200;
-  }
-
-  :global(.btn-secondary) {
-    @apply bg-gray-700 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200;
-  }
-
-  :global(.input) {
-    @apply bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent;
-  }
-
-  /* Loading animations */
-  :global(.fade-in) {
-    animation: fadeIn 0.3s ease-in-out;
-  }
-
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-</style>
