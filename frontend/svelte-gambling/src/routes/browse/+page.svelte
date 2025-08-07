@@ -220,7 +220,7 @@
     searchQuery = target.name;
     targetType = target.type;
     
-    // Set search results for trading buttons
+    // Set search results for trading button
     searchResults = {
       id: target.id,
       query: target.name,
@@ -359,12 +359,13 @@
               <p class="text-sm text-gray-500 mt-1">{searchResults.description}</p>
             {/if}
           </div>
-          <div class="flex gap-2">
-            <button class="btn btn-success" on:click={() => goto(`/trade/${searchResults.id}?type=buy`)}>
-              📈 Buy Shares
-            </button>
-            <button class="btn btn-danger" on:click={() => goto(`/trade/${searchResults.id}?type=sell`)}>
-              📉 Sell Shares
+          <!-- FIXED: Single Trade Button -->
+          <div class="flex justify-center">
+            <button 
+              class="btn btn-primary px-8 py-3"
+              on:click={() => goto(`/trade/${searchResults.id}`)}
+            >
+              💱 Trade
             </button>
           </div>
         </div>
@@ -410,33 +411,44 @@
       {#if featuredTargets.length > 0}
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {#each featuredTargets as target}
-            <button
-              class="p-4 bg-white/5 rounded-lg hover:bg-white/10 transition-all text-left group border border-white/10 hover:border-blue-500/30"
-              on:click={() => selectFeaturedTarget(target)}
-            >
-              <div class="flex items-center gap-3 mb-2">
-                <span class="text-2xl">{getTypeIcon(target.type)}</span>
-                <div class="flex-1 min-w-0">
-                  <h3 class="font-medium truncate group-hover:text-blue-400 transition-colors">
-                    {target.name}
-                  </h3>
-                  <p class="text-xs text-gray-400 capitalize">{target.type}</p>
+            <div class="p-4 bg-white/5 rounded-lg hover:bg-white/10 transition-all border border-white/10 hover:border-blue-500/30 group">
+              <!-- Target Info (clickable to show chart) -->
+              <button
+                class="w-full text-left mb-3"
+                on:click={() => selectFeaturedTarget(target)}
+              >
+                <div class="flex items-center gap-3 mb-2">
+                  <span class="text-2xl">{getTypeIcon(target.type)}</span>
+                  <div class="flex-1 min-w-0">
+                    <h3 class="font-medium truncate group-hover:text-blue-400 transition-colors">
+                      {target.name}
+                    </h3>
+                    <p class="text-xs text-gray-400 capitalize">{target.type}</p>
+                  </div>
                 </div>
-              </div>
-              
-              <div class="space-y-1">
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-400">Attention:</span>
-                  <span class="font-medium text-blue-400">{formatNumber(target.current_attention_score)}</span>
+                
+                <div class="space-y-1">
+                  <div class="flex justify-between text-sm">
+                    <span class="text-gray-400">Attention:</span>
+                    <span class="font-medium text-blue-400">{formatNumber(target.current_attention_score)}</span>
+                  </div>
+                  <div class="flex justify-between text-sm">
+                    <span class="text-gray-400">Updated:</span>
+                    <span class="font-medium text-green-400">
+                      {target.last_updated ? new Date(target.last_updated).toLocaleDateString() : 'Never'}
+                    </span>
+                  </div>
                 </div>
-                <div class="flex justify-between text-sm">
-                  <span class="text-gray-400">Updated:</span>
-                  <span class="font-medium text-green-400">
-                    {target.last_updated ? new Date(target.last_updated).toLocaleDateString() : 'Never'}
-                  </span>
-                </div>
-              </div>
-            </button>
+              </button>
+
+              <!-- FIXED: Single Trade Button -->
+              <button
+                class="btn btn-primary w-full text-sm"
+                on:click={() => goto(`/trade/${target.id}`)}
+              >
+                💱 Trade
+              </button>
+            </div>
           {/each}
         </div>
       {:else}

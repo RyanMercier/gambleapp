@@ -247,7 +247,7 @@
         </div>
       </div>
 
-      <!-- Main Chart Section (same as browse page) -->
+      <!-- Main Chart Section (exactly like browse page) -->
       <div class="card mb-8">
         <div class="flex items-center justify-between mb-6">
           <div>
@@ -282,9 +282,9 @@
 
       <!-- Trading Section -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <!-- Tournament Selection (1/3) -->
+        <!-- Tournament Selection -->
         <div class="card">
-          <h3 class="text-lg font-semibold mb-3">🏆 Select Tournament</h3>
+          <h3 class="text-lg font-semibold mb-3">🏆 Tournament</h3>
           
           {#if tournaments.length > 0}
             <select 
@@ -302,7 +302,7 @@
             {#if selectedTournament}
               <div class="p-3 bg-white/5 rounded-lg">
                 <div class="flex justify-between text-sm mb-1">
-                  <span>Tournament Balance:</span>
+                  <span>Virtual Balance:</span>
                   <span class="font-bold text-emerald-400">{formatCurrency(tournamentBalance)}</span>
                 </div>
                 <div class="flex justify-between text-xs text-gray-400">
@@ -310,7 +310,7 @@
                   <span>{selectedTournament.entry_fee > 0 ? formatCurrency(selectedTournament.entry_fee) : 'FREE'}</span>
                 </div>
                 <div class="flex justify-between text-xs text-gray-400">
-                  <span>Participants:</span>
+                  <span>Players:</span>
                   <span>{selectedTournament.current_participants || 0}</span>
                 </div>
                 <div class="flex justify-between text-xs text-gray-400">
@@ -322,12 +322,12 @@
           {:else}
             <div class="text-center py-4 text-gray-400">
               <p class="mb-2">No active tournaments</p>
-              <a href="/tournaments" class="btn btn-sm btn-primary">View Tournaments</a>
+              <a href="/tournaments" class="btn btn-sm btn-primary">Join Tournament</a>
             </div>
           {/if}
         </div>
 
-        <!-- Current Positions (1/3) -->
+        <!-- Current Positions -->
         <div class="card">
           <h3 class="text-lg font-semibold mb-3">📊 Your Positions</h3>
           
@@ -407,12 +407,12 @@
             <div class="text-center py-8 text-gray-400">
               <div class="text-3xl mb-2">📊</div>
               <p class="text-sm">No positions in {target.name}</p>
-              <p class="text-xs mt-1">Open a long or short position below</p>
+              <p class="text-xs mt-1">Open a position below</p>
             </div>
           {/if}
         </div>
 
-        <!-- Trading Form (1/3) -->
+        <!-- Trading Form -->
         <div class="card">
           <h3 class="text-lg font-semibold mb-4">💱 Open Position</h3>
           
@@ -462,10 +462,10 @@
               </div>
             {/if}
 
-            <!-- Trade Buttons -->
+            <!-- MAIN TRADING BUTTONS -->
             <div class="grid grid-cols-2 gap-3 mb-4">
               <button
-                class="btn btn-success"
+                class="btn btn-success py-3"
                 on:click={() => executeTrade('long')}
                 disabled={submitting || tradeAmount <= 0 || !canAffordLong}
               >
@@ -477,7 +477,7 @@
               </button>
               
               <button
-                class="btn btn-danger"
+                class="btn btn-danger py-3"
                 on:click={() => executeTrade('short')}
                 disabled={submitting || tradeAmount <= 0 || !canAffordShort}
               >
@@ -488,6 +488,20 @@
                 {/if}
               </button>
             </div>
+
+            <!-- Flatten All Button -->
+            {#if (longPosition && longPosition.attention_stakes > 0) || (shortPosition && shortPosition.attention_stakes > 0)}
+              <button
+                class="btn btn-warning w-full mb-4"
+                on:click={() => {
+                  if (longPosition) closePosition('long');
+                  if (shortPosition) closePosition('short');
+                }}
+                disabled={submitting}
+              >
+                🔄 Flatten All Positions
+              </button>
+            {/if}
 
             <!-- Quick Amount Buttons -->
             <div class="mb-4">
@@ -530,31 +544,11 @@
               <ul class="text-xs text-gray-300 space-y-1">
                 <li><strong>📈 Long:</strong> Profit when attention score increases</li>
                 <li><strong>📉 Short:</strong> Profit when attention score decreases</li>
-                <li><strong>🎯 Tournament:</strong> Virtual $10K balance per tournament</li>
-                <li><strong>🏆 Winner:</strong> Highest portfolio value wins prizes</li>
+                <li><strong>🎯 Score:</strong> Based on Google Trends data</li>
+                <li><strong>🏆 Winner:</strong> Highest portfolio value wins</li>
               </ul>
             </div>
           {/if}
-        </div>
-      </div>
-
-      <!-- Market Stats -->
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-        <div class="card text-center">
-          <div class="text-2xl font-bold text-blue-400">{formatNumber(target.current_attention_score || target.attention_score || 50)}</div>
-          <div class="text-sm text-gray-400">Attention Score</div>
-        </div>
-        <div class="card text-center">
-          <div class="text-2xl font-bold text-emerald-400">{formatCurrency((target.current_attention_score || target.attention_score || 50) / 10)}</div>
-          <div class="text-sm text-gray-400">Price/Unit</div>
-        </div>
-        <div class="card text-center">
-          <div class="text-2xl font-bold text-purple-400">{longPosition ? formatCurrency(longPosition.attention_stakes) : '$0'}</div>
-          <div class="text-sm text-gray-400">Long Stake</div>
-        </div>
-        <div class="card text-center">
-          <div class="text-2xl font-bold text-orange-400">{shortPosition ? formatCurrency(shortPosition.attention_stakes) : '$0'}</div>
-          <div class="text-sm text-gray-400">Short Stake</div>
         </div>
       </div>
     {/if}
@@ -579,15 +573,15 @@
   }
   
   .btn-success {
-    @apply bg-emerald-600 text-white hover:bg-emerald-700 focus:ring-emerald-500;
+    @apply bg-emerald-600 text-white hover:bg-emerald-700 focus:ring-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed;
   }
   
   .btn-danger {
-    @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+    @apply bg-red-600 text-white hover:bg-red-700 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   .btn-warning {
-    @apply bg-yellow-600 text-white hover:bg-yellow-700 focus:ring-yellow-500;
+    @apply bg-yellow-600 text-white hover:bg-yellow-700 focus:ring-yellow-500 disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   .btn-sm {

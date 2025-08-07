@@ -1143,44 +1143,54 @@ def get_my_trades(current_user: User = Depends(get_current_user), db: Session = 
 # Tournament endpoints
 @app.get("/tournaments")
 def get_tournaments(db: Session = Depends(get_db)):
-    """Get active tournaments - FIXED VERSION"""
-    tournaments = db.query(Tournament).filter(
-        Tournament.is_active == True,
-        Tournament.is_finished == False
-    ).all()
-    
-    result = []
-    for tournament in tournaments:
-        entry_count = db.query(TournamentEntry).filter(
-            TournamentEntry.tournament_id == tournament.id
-        ).count()
+    try:
+        # FIX: Use is_active and is_finished fields that actually exist
+        tournaments = db.query(Tournament).filter(
+            Tournament.is_active == True,
+            Tournament.is_finished == False
+        ).all()
         
-        # Calculate status based on dates
-        now = datetime.utcnow()
-        if now < tournament.start_date:
-            status = "upcoming"
-        elif now > tournament.end_date:
-            status = "finished"
-        else:
-            status = "active"
+        result = []
+        for tournament in tournaments:
+            try:
+                entry_count = db.query(TournamentEntry).filter(
+                    TournamentEntry.tournament_id == tournament.id
+                ).count()
+                
+                # Calculate status from dates instead of non-existent .status field
+                now = datetime.utcnow()
+                if now < tournament.start_date:
+                    status = "upcoming"
+                elif now > tournament.end_date:
+                    status = "finished"
+                else:
+                    status = "active"
+                
+                result.append({
+                    "id": tournament.id,
+                    "name": tournament.name,
+                    "target_type": tournament.target_type.value,
+                    "duration": tournament.duration.value,
+                    "entry_fee": float(tournament.entry_fee),
+                    "current_participants": entry_count,
+                    "prize_pool": float(tournament.prize_pool),
+                    "start_date": tournament.start_date.isoformat(),
+                    "end_date": tournament.end_date.isoformat(),
+                    "status": status,  # Calculated, not from model
+                    "is_active": tournament.is_active,
+                    "is_finished": tournament.is_finished
+                })
+                
+            except Exception as e:
+                logger.error(f"❌ Error processing tournament {tournament.id}: {e}")
+                continue
         
-        result.append({
-            "id": tournament.id,
-            "name": tournament.name,
-            "target_type": tournament.target_type.value,
-            "duration": tournament.duration.value,
-            "entry_fee": float(tournament.entry_fee),
-            "current_participants": entry_count,
-            "prize_pool": float(tournament.prize_pool),
-            "start_date": tournament.start_date.isoformat(),
-            "end_date": tournament.end_date.isoformat(),
-            "status": status,
-            "is_active": tournament.is_active,
-            "is_finished": tournament.is_finished
-        })
-    
-    logger.info(f"📋 Returning {len(result)} tournaments")
-    return result
+        logger.info(f"📋 Returning {len(result)} tournaments")
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Tournaments endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=f"Tournament error: {str(e)}")
 
 # Add tournament join endpoint
 @app.post("/tournaments/join")
