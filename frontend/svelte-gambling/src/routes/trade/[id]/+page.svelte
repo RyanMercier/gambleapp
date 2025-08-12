@@ -149,16 +149,9 @@
     tradeError = '';
 
     try {
-      // Close by selling the entire position
-      const closeAmount = position.attention_stakes / 10; // Convert to shares
-      
-      const result = await apiFetch('/trade', {
-        method: 'POST',
-        body: JSON.stringify({
-          target_id: parseInt(targetId),
-          trade_type: 'sell',
-          shares: closeAmount
-        })
+      // Use query parameters instead of request body
+      const result = await apiFetch(`/trade/close/${targetId}?position_type=${positionType}`, {
+        method: 'POST'
       });
 
       const pnlText = result.pnl ? (result.pnl >= 0 ? `+$${result.pnl.toFixed(2)}` : `-$${Math.abs(result.pnl).toFixed(2)}`) : '';
@@ -169,6 +162,35 @@
     } catch (err) {
       tradeError = err.message || 'Failed to close position';
       console.error('Close position error:', err);
+    } finally {
+      submitting = false;
+    }
+  }
+
+  async function flattenAllPositions() {
+    if (!target || submitting) return;
+    
+    // Check if user has any positions to flatten
+    if (!longPosition && !shortPosition) {
+      tradeError = 'No positions to flatten';
+      return;
+    }
+
+    submitting = true;
+    tradeError = '';
+
+    try {
+      // Use the dedicated flatten endpoint
+      const result = await apiFetch(`/trade/flatten/${targetId}`, {
+        method: 'POST'
+      });
+
+      alert(`✅ All positions flattened! Total P&L: ${result.total_pnl >= 0 ? '+' : ''}$${result.total_pnl.toFixed(2)}`);
+      await loadAllData();
+
+    } catch (err) {
+      tradeError = err.message || 'Failed to flatten positions';
+      console.error('Flatten positions error:', err);
     } finally {
       submitting = false;
     }
@@ -493,10 +515,7 @@
             {#if (longPosition && longPosition.attention_stakes > 0) || (shortPosition && shortPosition.attention_stakes > 0)}
               <button
                 class="btn btn-warning w-full mb-4"
-                on:click={() => {
-                  if (longPosition) closePosition('long');
-                  if (shortPosition) closePosition('short');
-                }}
+                on:click={() => {flattenAllPositions}}
                 disabled={submitting}
               >
                 🔄 Flatten All Positions

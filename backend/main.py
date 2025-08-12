@@ -979,22 +979,78 @@ def flatten_position(
     db: Session = Depends(get_db)
 ):
     """Flatten (close) entire position in a target"""
-    portfolio = db.query(Portfolio).filter(
-        Portfolio.user_id == current_user.id,
-        Portfolio.target_id == target_id
-    ).first()
-    
-    if not portfolio:
-        raise HTTPException(status_code=404, detail="No position found for this target")
-    
-    # Create a sell trade for the entire position
-    trade_request = TradeRequest(
-        target_id=target_id,
-        trade_type="sell",
-        shares=float(portfolio.attention_stakes) / 10  # Convert stakes back to shares
-    )
-    
-    return execute_trade(trade_request, current_user, db)
+    try:
+        target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Target not found")
+        
+        # Find all positions for this target
+        positions = db.query(Portfolio).filter(
+            Portfolio.user_id == current_user.id,
+            Portfolio.target_id == target_id
+        ).all()
+        
+        if not positions:
+            raise HTTPException(status_code=404, detail="No positions found for this target")
+        
+        total_pnl = Decimal('0.0')
+        total_closed = Decimal('0.0')
+        closed_positions = []
+        
+        for portfolio in positions:
+            position_type = portfolio.position_type or 'long'
+            close_amount = portfolio.attention_stakes
+            
+            # Calculate P&L for this position
+            score_ratio = target.current_attention_score / portfolio.average_entry_score if portfolio.average_entry_score > 0 else 1
+            
+            if position_type == "long":
+                # Long profits when score goes up
+                pnl = close_amount * (score_ratio - 1)
+            else:
+                # Short profits when score goes down
+                pnl = close_amount * (1 - score_ratio)
+            
+            total_pnl += pnl
+            total_closed += close_amount
+            
+            # Return money + P&L to user
+            current_user.balance += close_amount + pnl
+            
+            # Record the close trade
+            close_trade = Trade(
+                user_id=current_user.id,
+                target_id=target_id,
+                trade_type=f"flatten_{position_type}",
+                stake_amount=close_amount,
+                attention_score_at_entry=target.current_attention_score,
+                pnl=pnl
+            )
+            db.add(close_trade)
+            
+            closed_positions.append({
+                "position_type": position_type,
+                "amount": float(close_amount),
+                "pnl": float(pnl)
+            })
+            
+            # Remove the position
+            db.delete(portfolio)
+        
+        db.commit()
+        
+        return {
+            "message": "All positions flattened successfully",
+            "total_pnl": float(total_pnl),
+            "total_closed": float(total_closed),
+            "balance": float(current_user.balance),
+            "closed_positions": closed_positions
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Flatten position error: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Flatten failed: {str(e)}")
 
 @app.get("/portfolio")
 def get_portfolio(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1152,6 +1208,83 @@ def get_daily_pnl(current_user: User = Depends(get_current_user), db: Session = 
     except Exception as e:
         logger.error(f"❌ Daily P&L error: {e}")
         return {"daily_pnl": 0.0, "trades_today": 0}
+    
+@app.get("/user/stats")
+def get_user_stats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get comprehensive user trading statistics"""
+    try:
+        # Get all user trades
+        trades = db.query(Trade).filter(
+            Trade.user_id == current_user.id
+        ).all()
+        
+        # Get user's portfolio
+        portfolio = db.query(Portfolio).filter(
+            Portfolio.user_id == current_user.id
+        ).all()
+        
+        # Calculate stats
+        closed_trades = [t for t in trades if t.is_closed]
+        winning_trades = [t for t in closed_trades if (t.pnl or 0) > 0]
+        losing_trades = [t for t in closed_trades if (t.pnl or 0) < 0]
+        
+        total_pnl = sum(float(t.pnl or 0) for t in closed_trades)
+        
+        # Portfolio value calculation
+        portfolio_value = 0.0
+        for position in portfolio:
+            target = position.target
+            if target:
+                attention_stakes = float(position.attention_stakes)
+                average_entry_score = float(position.average_entry_score) if position.average_entry_score else 1.0
+                current_attention_score = float(target.current_attention_score)
+                score_ratio = current_attention_score / average_entry_score if average_entry_score > 0 else 1.0
+                
+                position_type = getattr(position, 'position_type', 'long')
+                if position_type == "long":
+                    current_value = attention_stakes * score_ratio
+                else:
+                    current_value = attention_stakes * (2.0 - score_ratio)
+                portfolio_value += current_value
+        
+        # Tournament stats (placeholder)
+        tournament_entries = db.query(TournamentEntry).filter(
+            TournamentEntry.user_id == current_user.id
+        ).all()
+        
+        tournaments_won = len([e for e in tournament_entries if getattr(e, 'rank', None) == 1])
+        tournaments_top3 = len([e for e in tournament_entries if getattr(e, 'rank', None) and e.rank <= 3])
+        
+        return {
+            "trading_stats": {
+                "total_trades": len(trades),
+                "closed_trades": len(closed_trades),
+                "winning_trades": len(winning_trades),
+                "losing_trades": len(losing_trades),
+                "win_rate": len(winning_trades) / len(closed_trades) * 100 if closed_trades else 0,
+                "total_pnl": total_pnl,
+                "average_pnl": total_pnl / len(closed_trades) if closed_trades else 0,
+                "best_trade": max([float(t.pnl or 0) for t in closed_trades], default=0),
+                "worst_trade": min([float(t.pnl or 0) for t in closed_trades], default=0),
+                "current_portfolio_value": portfolio_value,
+                "total_value": portfolio_value + float(current_user.balance)
+            },
+            "tournament_stats": {
+                "tournaments_entered": len(tournament_entries),
+                "tournaments_won": tournaments_won,
+                "tournaments_top3": tournaments_top3,
+                "total_winnings": sum(float(getattr(e, 'prize_won', 0) or 0) for e in tournament_entries)
+            },
+            "account_info": {
+                "username": current_user.username,
+                "balance": float(current_user.balance),
+                "member_since": current_user.created_at.isoformat() if hasattr(current_user, 'created_at') else None
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ User stats error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get user stats: {str(e)}")
 
 @app.get("/trades/my")
 def get_my_trades(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):

@@ -17,15 +17,16 @@
     }
 
     try {
-      const [portfolioData, tradesData, leaderboardData, tournamentsData] = await Promise.all([
+      const [portfolioData, tradesResponse, leaderboardData, tournamentsData] = await Promise.all([
         apiFetch('/portfolio'),
         apiFetch('/trades/my'),
-        apiFetch('/leaderboard'),
+        apiFetch('/leaderboard'), 
         apiFetch('/tournaments')
       ]);
 
       portfolio = portfolioData;
-      recentTrades = tradesData.slice(0, 5);
+      // FIX: Handle the trades response format correctly
+      recentTrades = (tradesResponse.trades || tradesResponse || []).slice(0, 5);
       leaderboard = leaderboardData.slice(0, 5);
       tournaments = tournamentsData.slice(0, 3);
     } catch (error) {

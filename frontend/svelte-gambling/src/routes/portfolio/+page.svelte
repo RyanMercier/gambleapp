@@ -75,6 +75,35 @@
     if (pnl < 0) return 'text-red-400';
     return 'text-gray-400';
   }
+
+  async function closePositionFromPortfolio(targetId, positionType) {
+    try {
+      // Use query parameters instead of request body
+      const result = await apiFetch(`/trade/close/${targetId}?position_type=${positionType}`, {
+        method: 'POST'
+      });
+
+      const pnlText = result.pnl ? (result.pnl >= 0 ? `+$${result.pnl.toFixed(2)}` : `-$${Math.abs(result.pnl).toFixed(2)}`) : '';
+      alert(`✅ ${positionType.toUpperCase()} position closed! ${pnlText ? `P&L: ${pnlText}` : ''}`);
+
+      // Reload portfolio data
+      await loadPortfolioData();
+
+    } catch (err) {
+      alert('Failed to close position: ' + (err.message || 'Unknown error'));
+      console.error('Close position error:', err);
+    }
+  }
+
+  // Function to reload portfolio data
+  async function loadPortfolioData() {
+    try {
+      const portfolioData = await apiFetch('/portfolio');
+      portfolio = portfolioData;
+    } catch (error) {
+      console.error('Failed to reload portfolio:', error);
+    }
+  }
 </script>
 
 <svelte:head>
@@ -200,14 +229,14 @@
                     <td class="py-3 text-center">
                       <div class="flex gap-1 justify-center">
                         <button 
-                          class="btn btn-success text-xs px-2 py-1"
-                          on:click={() => goto(`/trade/${position.target.id}?type=buy`)}
+                          class="btn btn-primary text-xs px-2 py-1"
+                          on:click={() => goto(`/trade/${position.target.id}`)}
                         >
-                          Long
+                          📊 View Chart
                         </button>
                         <button 
                           class="btn btn-danger text-xs px-2 py-1"
-                          on:click={() => goto(`/trade/${position.target.id}?type=sell`)}
+                          on:click={() => closePositionFromPortfolio(position.target.id, position.position_type)}
                         >
                           Close
                         </button>
