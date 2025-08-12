@@ -804,100 +804,106 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
 # Trading endpoints
 @app.post("/trade")
 def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Execute an attention trade - FIXED VERSION with proper long/short"""
-    target = db.query(AttentionTarget).filter(AttentionTarget.id == trade.target_id).first()
-    if not target:
-        raise HTTPException(status_code=404, detail="Target not found")
-    
-    # Convert frontend "shares" to backend "stake_amount"
-    trade_amount = Decimal(str(abs(trade.shares) * 10))
-    pnl = Decimal('0.0')
-    
-    logger.info(f"💱 Trade: {trade.trade_type} {trade.shares} units of {target.name} (${trade_amount})")
-    
-    if trade.trade_type == "buy":  # LONG position
-        if current_user.balance < trade_amount:
-            raise HTTPException(status_code=400, detail=f"Insufficient balance. Need ${trade_amount}, have ${current_user.balance}")
+    """Execute an attention trade - FIXED for consistent decimal handling"""
+    try:
+        target = db.query(AttentionTarget).filter(AttentionTarget.id == trade.target_id).first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Target not found")
         
-        current_user.balance -= trade_amount
+        # Convert to Decimal for precise calculations
+        from decimal import Decimal
+        trade_amount = Decimal(str(abs(trade.shares) * 10))
+        current_score = Decimal(str(target.current_attention_score))
+        pnl = Decimal('0.0')
         
-        # Update or create LONG portfolio position
-        portfolio = db.query(Portfolio).filter(
-            Portfolio.user_id == current_user.id,
-            Portfolio.target_id == target.id
-        ).first()
+        logger.info(f"💱 Trade: {trade.trade_type} {trade.shares} units of {target.name} (${trade_amount})")
         
-        if portfolio:
-            # Update existing position - weighted average
-            total_stakes = portfolio.attention_stakes + trade_amount
-            portfolio.average_entry_score = (
-                (portfolio.attention_stakes * portfolio.average_entry_score + 
-                 trade_amount * target.current_attention_score) / total_stakes
-            )
-            portfolio.attention_stakes = total_stakes
-        else:
-            # Create new LONG position
-            portfolio = Portfolio(
-                user_id=current_user.id,
-                target_id=target.id,
-                attention_stakes=trade_amount,
-                average_entry_score=target.current_attention_score,
-                position_type="long"  # Add this field to model
-            )
-            db.add(portfolio)
-    
-    elif trade.trade_type == "sell":  # SHORT position (not close)
-        if current_user.balance < trade_amount:
-            raise HTTPException(status_code=400, detail=f"Insufficient balance. Need ${trade_amount}, have ${current_user.balance}")
+        if trade.trade_type == "buy":  # LONG position
+            if current_user.balance < trade_amount:
+                raise HTTPException(status_code=400, detail=f"Insufficient balance. Need ${trade_amount}, have ${current_user.balance}")
+            
+            current_user.balance -= trade_amount
+            
+            # Update or create LONG portfolio position
+            portfolio = db.query(Portfolio).filter(
+                Portfolio.user_id == current_user.id,
+                Portfolio.target_id == target.id,
+                Portfolio.position_type == "long"
+            ).first()
+            
+            if portfolio:
+                # Update existing position - all Decimal math
+                total_stakes = portfolio.attention_stakes + trade_amount
+                weighted_avg = (portfolio.attention_stakes * portfolio.average_entry_score + trade_amount * current_score) / total_stakes
+                portfolio.average_entry_score = weighted_avg
+                portfolio.attention_stakes = total_stakes
+            else:
+                # Create new LONG position
+                portfolio = Portfolio(
+                    user_id=current_user.id,
+                    target_id=target.id,
+                    attention_stakes=trade_amount,
+                    average_entry_score=current_score,
+                    position_type="long"
+                )
+                db.add(portfolio)
         
-        current_user.balance -= trade_amount
+        elif trade.trade_type == "sell":  # SHORT position
+            if current_user.balance < trade_amount:
+                raise HTTPException(status_code=400, detail=f"Insufficient balance. Need ${trade_amount}, have ${current_user.balance}")
+            
+            current_user.balance -= trade_amount
+            
+            # Create or update SHORT position
+            short_portfolio = db.query(Portfolio).filter(
+                Portfolio.user_id == current_user.id,
+                Portfolio.target_id == target.id,
+                Portfolio.position_type == "short"
+            ).first()
+            
+            if short_portfolio:
+                # Update existing short position - all Decimal math
+                total_stakes = short_portfolio.attention_stakes + trade_amount
+                weighted_avg = (short_portfolio.attention_stakes * short_portfolio.average_entry_score + trade_amount * current_score) / total_stakes
+                short_portfolio.average_entry_score = weighted_avg
+                short_portfolio.attention_stakes = total_stakes
+            else:
+                # Create new SHORT position
+                short_portfolio = Portfolio(
+                    user_id=current_user.id,
+                    target_id=target.id,
+                    attention_stakes=trade_amount,
+                    average_entry_score=current_score,
+                    position_type="short"
+                )
+                db.add(short_portfolio)
         
-        # Create or update SHORT position (separate from long)
-        short_portfolio = db.query(Portfolio).filter(
-            Portfolio.user_id == current_user.id,
-            Portfolio.target_id == target.id,
-            Portfolio.position_type == "short"
-        ).first()
+        # Record the trade
+        new_trade = Trade(
+            user_id=current_user.id,
+            target_id=target.id,
+            trade_type=f"stake_{trade.trade_type}",
+            position_type="long" if trade.trade_type == "buy" else "short",
+            stake_amount=trade_amount,
+            attention_score_at_entry=current_score,
+            pnl=pnl
+        )
+        db.add(new_trade)
         
-        if short_portfolio:
-            # Update existing short position
-            total_stakes = short_portfolio.attention_stakes + trade_amount
-            short_portfolio.average_entry_score = (
-                (short_portfolio.attention_stakes * short_portfolio.average_entry_score + 
-                 trade_amount * target.current_attention_score) / total_stakes
-            )
-            short_portfolio.attention_stakes = total_stakes
-        else:
-            # Create new SHORT position
-            short_portfolio = Portfolio(
-                user_id=current_user.id,
-                target_id=target.id,
-                attention_stakes=trade_amount,
-                average_entry_score=target.current_attention_score,
-                position_type="short"
-            )
-            db.add(short_portfolio)
-    
-    # Record the trade
-    new_trade = Trade(
-        user_id=current_user.id,
-        target_id=target.id,
-        trade_type=f"stake_{trade.trade_type}",
-        stake_amount=trade_amount,
-        attention_score_at_entry=target.current_attention_score,
-        pnl=pnl
-    )
-    db.add(new_trade)
-    
-    db.commit()
-    
-    return {
-        "message": f"{'Long' if trade.trade_type == 'buy' else 'Short'} position opened successfully",
-        "balance": float(current_user.balance),
-        "total_amount": float(trade_amount),
-        "trade_id": new_trade.id,
-        "position_type": trade.trade_type
-    }
+        db.commit()
+        
+        return {
+            "message": f"{'Long' if trade.trade_type == 'buy' else 'Short'} position opened successfully",
+            "balance": float(current_user.balance),
+            "total_amount": float(trade_amount),
+            "trade_id": new_trade.id,
+            "position_type": "long" if trade.trade_type == "buy" else "short"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Execute trade error: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Trade execution failed: {str(e)}")
 
 @app.post("/trade/close/{target_id}")
 def close_position(
@@ -992,53 +998,72 @@ def flatten_position(
 
 @app.get("/portfolio")
 def get_portfolio(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Get user's portfolio - FIXED VERSION"""
+    """Get user's portfolio - FIXED for decimal/float mixing"""
     try:
         positions = db.query(Portfolio).filter(
             Portfolio.user_id == current_user.id
         ).all()
         
         portfolio_data = []
-        total_value = 0
-        daily_pnl = 0  # Calculate daily P&L
+        total_value = 0.0
+        daily_pnl = 0.0
         
         for position in positions:
             target = position.target
             
-            # Calculate current value based on position type
-            score_ratio = target.current_attention_score / position.average_entry_score if position.average_entry_score > 0 else 1
+            # Convert ALL values to float immediately to avoid mixing
+            attention_stakes = float(position.attention_stakes)
+            average_entry_score = float(position.average_entry_score) if position.average_entry_score else 1.0
+            current_attention_score = float(target.current_attention_score)
             
-            if getattr(position, 'position_type', 'long') == "long":
+            # All calculations as float
+            score_ratio = current_attention_score / average_entry_score if average_entry_score > 0 else 1.0
+            
+            # Get position type safely
+            position_type = getattr(position, 'position_type', 'long')
+            
+            if position_type == "long":
                 # Long profits when score goes up
-                current_value = float(position.attention_stakes) * score_ratio
-                pnl = current_value - float(position.attention_stakes)
+                current_value = attention_stakes * score_ratio
+                pnl = current_value - attention_stakes
             else:
                 # Short profits when score goes down  
-                current_value = float(position.attention_stakes) * (2 - score_ratio)
-                pnl = current_value - float(position.attention_stakes)
+                current_value = attention_stakes * (2.0 - score_ratio)
+                pnl = current_value - attention_stakes
             
-            pnl_percent = (pnl / float(position.attention_stakes)) * 100 if position.attention_stakes > 0 else 0
+            pnl_percent = (pnl / attention_stakes) * 100.0 if attention_stakes > 0 else 0.0
             
             portfolio_data.append({
                 "target": {
                     "id": target.id,
                     "name": target.name,
                     "type": target.type.value,
-                    "current_attention_score": float(target.current_attention_score)
+                    "current_attention_score": current_attention_score
                 },
                 "target_id": target.id,
-                "attention_stakes": float(position.attention_stakes),
-                "average_entry_score": float(position.average_entry_score),
+                "attention_stakes": attention_stakes,
+                "average_entry_score": average_entry_score,
                 "current_value": current_value,
                 "pnl": pnl,
                 "pnl_percent": pnl_percent,
-                "position_type": getattr(position, 'position_type', 'long'),
+                "position_type": position_type,
                 # Legacy compatibility
-                "shares_owned": float(position.attention_stakes) / 10,
+                "shares_owned": attention_stakes / 10.0,
                 "position_value": current_value
             })
             total_value += current_value
-            daily_pnl += pnl  # Accumulate for daily P&L
+        
+        # Calculate today's PnL from trades
+        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow = today + timedelta(days=1)
+        
+        today_trades = db.query(Trade).filter(
+            Trade.user_id == current_user.id,
+            Trade.timestamp >= today,
+            Trade.timestamp < tomorrow
+        ).all()
+        
+        daily_pnl = sum(float(trade.pnl or 0) for trade in today_trades)
         
         return {
             "positions": portfolio_data,
@@ -1054,9 +1079,9 @@ def get_portfolio(current_user: User = Depends(get_current_user), db: Session = 
 
 @app.get("/user/tournament-balances")
 def get_tournament_balances(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Get user's balance in each active tournament"""
+    """Get user's balance in each active tournament - FIXED"""
     try:
-        # Get all user's tournament entries
+        # Get all user's tournament entries for active tournaments
         entries = db.query(TournamentEntry).filter(
             TournamentEntry.user_id == current_user.id
         ).join(Tournament).filter(
@@ -1068,16 +1093,29 @@ def get_tournament_balances(current_user: User = Depends(get_current_user), db: 
         for entry in entries:
             tournament = entry.tournament
             
-            # Calculate current tournament balance (starting + P&L from trades in this tournament)
-            current_balance = float(entry.starting_balance)  # Everyone starts with $10,000
+            # Calculate current tournament balance safely
+            starting_balance = float(entry.starting_balance)
+            
+            # Use current_balance if it exists, otherwise calculate it
+            try:
+                current_balance = float(getattr(entry, 'current_balance', starting_balance))
+            except (AttributeError, TypeError):
+                # If current_balance doesn't exist, calculate from tournament trades
+                tournament_trades = db.query(Trade).filter(
+                    Trade.user_id == current_user.id,
+                    Trade.tournament_id == tournament.id
+                ).all()
+                
+                tournament_pnl = sum(float(trade.pnl or 0) for trade in tournament_trades)
+                current_balance = starting_balance + tournament_pnl
             
             balances.append({
                 "tournament_id": tournament.id,
                 "tournament_name": tournament.name,
-                "starting_balance": float(entry.starting_balance),
+                "starting_balance": starting_balance,
                 "current_balance": current_balance,
                 "entry_fee": float(entry.entry_fee),
-                "is_free": entry.entry_fee == 0
+                "is_free": float(entry.entry_fee) == 0.0
             })
         
         return {
@@ -1117,28 +1155,48 @@ def get_daily_pnl(current_user: User = Depends(get_current_user), db: Session = 
 
 @app.get("/trades/my")
 def get_my_trades(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Get user's trade history with frontend-compatible format"""
-    trades = db.query(Trade).filter(
-        Trade.user_id == current_user.id
-    ).order_by(Trade.timestamp.desc()).limit(50).all()
-    
-    result = []
-    for trade in trades:
-        target = trade.target
-        result.append({
-            "id": trade.id,
-            "target_id": target.id,
-            "target_name": target.name,
-            "target_type": target.type.value,
-            "trade_type": trade.trade_type.replace("stake_", ""),  # Convert "stake_buy" to "buy"
-            "stake_amount": float(trade.stake_amount),
-            "attention_score_at_entry": float(trade.attention_score_at_entry),
-            "timestamp": trade.timestamp.isoformat(),
-            "outcome": trade.outcome,
-            "pnl": float(trade.pnl) if trade.pnl else 0.0
-        })
-    
-    return {"trades": result}
+    """Get user's trade history with frontend-compatible format - FIXED"""
+    try:
+        trades = db.query(Trade).filter(
+            Trade.user_id == current_user.id
+        ).order_by(Trade.timestamp.desc()).limit(50).all()
+        
+        result = []
+        for trade in trades:
+            target = trade.target
+            
+            # Calculate outcome from PnL (since outcome field doesn't exist)
+            pnl_value = float(trade.pnl) if trade.pnl else 0.0
+            if trade.is_closed:
+                if pnl_value > 0:
+                    outcome = "profit"
+                elif pnl_value < 0:
+                    outcome = "loss"
+                else:
+                    outcome = "break_even"
+            else:
+                outcome = "open"
+            
+            result.append({
+                "id": trade.id,
+                "target_id": target.id,
+                "target_name": target.name,
+                "target_type": target.type.value,
+                "trade_type": trade.trade_type.replace("stake_", ""),  # Convert "stake_buy" to "buy"
+                "position_type": getattr(trade, 'position_type', 'long'),
+                "stake_amount": float(trade.stake_amount),
+                "attention_score_at_entry": float(trade.attention_score_at_entry),
+                "timestamp": trade.timestamp.isoformat(),
+                "outcome": outcome,  # Calculated instead of accessing nonexistent field
+                "pnl": pnl_value,
+                "is_closed": trade.is_closed
+            })
+        
+        return {"trades": result}
+        
+    except Exception as e:
+        logger.error(f"❌ Get trades error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get trades: {str(e)}")
 
 # Tournament endpoints
 @app.get("/tournaments")

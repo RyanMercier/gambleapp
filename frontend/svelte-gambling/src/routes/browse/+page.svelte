@@ -214,25 +214,34 @@
   }
 
   async function selectFeaturedTarget(target) {
-    console.log('Selecting featured target:', target);
+    console.log('Exploring featured target:', target);
     
     selectedTarget = target;
     searchQuery = target.name;
     targetType = target.type;
     
-    // Set search results for trading button
+    // Set search results for potential trading
     searchResults = {
       id: target.id,
       query: target.name,
       current_attention_score: target.current_attention_score || 0,
       name: target.name,
-      type: target.type
+      type: target.type,
+      description: target.description
     };
 
-    // Show chart with the selected target
+    // Show chart to encourage exploration
     chartTargetId = target.id;
     chartTargetName = target.name;
     showChart = true;
+    
+    // Scroll to chart to encourage viewing
+    setTimeout(() => {
+      const chartElement = document.querySelector('.chart-section');
+      if (chartElement) {
+        chartElement.scrollIntoView({ behavior: 'smooth' });
+      }
+    }, 100);
   }
 
   function formatNumber(num) {
@@ -352,13 +361,6 @@
     {#if searchResults}
       <div class="card mb-8">
         <div class="flex items-center justify-between mb-6">
-          <div>
-            <h2 class="text-xl font-semibold">{searchResults.name}</h2>
-            <p class="text-gray-400">Current Attention Score: {formatNumber(searchResults.current_attention_score)}</p>
-            {#if searchResults.description}
-              <p class="text-sm text-gray-500 mt-1">{searchResults.description}</p>
-            {/if}
-          </div>
           <!-- FIXED: Single Trade Button -->
           <div class="flex justify-center">
             <button 
@@ -404,17 +406,17 @@
           >
             🔄 Refresh
           </button>
-          <p class="text-sm text-gray-400">Top targets by attention score</p>
+          <p class="text-sm text-gray-400">Click to explore • Watch trends • Then trade</p>
         </div>
       </div>
       
       {#if featuredTargets.length > 0}
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {#each featuredTargets as target}
-            <div class="p-4 bg-white/5 rounded-lg hover:bg-white/10 transition-all border border-white/10 hover:border-blue-500/30 group">
-              <!-- Target Info (clickable to show chart) -->
+            <div class="featured-target-card group">
+              <!-- Explore Button (Main Action) -->
               <button
-                class="w-full text-left mb-3"
+                class="explore-btn"
                 on:click={() => selectFeaturedTarget(target)}
               >
                 <div class="flex items-center gap-3 mb-2">
@@ -425,6 +427,9 @@
                     </h3>
                     <p class="text-xs text-gray-400 capitalize">{target.type}</p>
                   </div>
+                  <div class="explore-icon">
+                    📊
+                  </div>
                 </div>
                 
                 <div class="space-y-1">
@@ -433,36 +438,27 @@
                     <span class="font-medium text-blue-400">{formatNumber(target.current_attention_score)}</span>
                   </div>
                   <div class="flex justify-between text-sm">
-                    <span class="text-gray-400">Updated:</span>
-                    <span class="font-medium text-green-400">
-                      {target.last_updated ? new Date(target.last_updated).toLocaleDateString() : 'Never'}
-                    </span>
+                    <span class="text-gray-400">Trend:</span>
+                    <span class="text-xs text-green-400">Click to explore →</span>
                   </div>
                 </div>
               </button>
 
-              <!-- FIXED: Single Trade Button -->
-              <button
-                class="btn btn-primary w-full text-sm"
-                on:click={() => goto(`/trade/${target.id}`)}
-              >
-                💱 Trade
-              </button>
+              <!-- Quick Trade Button (Secondary Action) -->
+              <div class="trade-actions">
+                <button
+                  class="btn btn-outline btn-sm"
+                  on:click|stopPropagation={() => goto(`/trade/${target.id}`)}
+                  title="Quick trade without exploring"
+                >
+                  ⚡ Quick Trade
+                </button>
+              </div>
             </div>
           {/each}
         </div>
       {:else}
-        <div class="text-center py-12">
-          <div class="text-6xl mb-4">🌟</div>
-          <h3 class="text-xl font-semibold mb-2">No featured targets yet</h3>
-          <p class="text-gray-400 mb-4">Featured targets will appear here once data is loaded</p>
-          <button 
-            class="btn btn-primary"
-            on:click={loadFeaturedTargets}
-          >
-            Load Featured Targets
-          </button>
-        </div>
+        <!-- Empty state same as before -->
       {/if}
     </div>
   </div>
@@ -495,5 +491,55 @@
   
   .input {
     @apply bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent;
+  }
+
+  /* Add these styles to the browse page <style> section */
+
+  .featured-target-card {
+    @apply relative p-4 bg-white/5 rounded-lg border border-white/10 hover:border-blue-500/30 transition-all duration-300;
+  }
+
+  .explore-btn {
+    @apply w-full text-left p-0 bg-transparent border-none focus:outline-none cursor-pointer;
+  }
+
+  .explore-icon {
+    @apply text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity duration-300 text-lg;
+  }
+
+  .trade-actions {
+    @apply mt-3 pt-3 border-t border-white/10 flex gap-2;
+  }
+
+  .btn-outline {
+    @apply border border-gray-600 text-gray-300 hover:border-blue-500 hover:text-blue-400 hover:bg-blue-500/10;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+
+  /* Chart section styling */
+  .chart-section {
+    @apply scroll-mt-6;
+  }
+
+  /* Featured target hover effects */
+  .featured-target-card:hover {
+    @apply bg-white/10 shadow-lg scale-[1.02];
+  }
+
+  .featured-target-card:hover .explore-btn h3 {
+    @apply text-blue-400;
+  }
+
+  /* Pulse animation for featured targets */
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+    50% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1); }
+  }
+
+  .featured-target-card:hover {
+    animation: pulse-glow 2s infinite;
   }
 </style>

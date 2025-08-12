@@ -23,11 +23,11 @@ SAMPLE_TARGETS = [
     {"name": "Donald Trump", "type": "politician", "search_term": "donald trump"},
     {"name": "Elon Musk", "type": "celebrity", "search_term": "elon musk"},  # Changed from billionaire to celebrity
     {"name": "Bitcoin", "type": "crypto", "search_term": "bitcoin"},  # Changed from stock to crypto
-    {"name": "Tesla", "type": "stock", "search_term": "tesla"},
-    {"name": "Joe Biden", "type": "politician", "search_term": "joe biden"},
-    {"name": "Apple", "type": "stock", "search_term": "apple stock"},
-    {"name": "United States", "type": "country", "search_term": "united states"},
-    {"name": "Fortnite", "type": "game", "search_term": "fortnite"},
+    # {"name": "Tesla", "type": "stock", "search_term": "tesla"},
+    # {"name": "Joe Biden", "type": "politician", "search_term": "joe biden"},
+    # {"name": "Apple", "type": "stock", "search_term": "apple stock"},
+    # {"name": "United States", "type": "country", "search_term": "united states"},
+    # {"name": "Fortnite", "type": "game", "search_term": "fortnite"},
 ]
 
 async def create_target_with_data(target_data: dict, service: GoogleTrendsService, db: SessionLocal) -> bool:
