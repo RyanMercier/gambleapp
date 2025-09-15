@@ -804,52 +804,35 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
 # Trading endpoints
 @app.post("/trade")
 def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Execute an attention trade with proper balance management and tournament requirements"""
+    """Execute an attention trade - FIXED for consistent decimal handling"""
     try:
-        # FIX 4: Require user to be in tournament to trade
-        active_tournament_entry = db.query(TournamentEntry).filter(
-            TournamentEntry.user_id == current_user.id
-        ).join(Tournament).filter(
-            Tournament.is_active == True,
-            Tournament.is_finished == False,
-            Tournament.start_date <= datetime.utcnow(),
-            Tournament.end_date >= datetime.utcnow()
-        ).first()
-        
-        if not active_tournament_entry:
-            # Auto-join free 1-day tournament
-            free_tournament = auto_join_free_tournament(current_user.id, db)
-            if not free_tournament:
-                raise HTTPException(status_code=400, detail="No active tournament found. Please join a tournament to trade.")
-            active_tournament_entry = db.query(TournamentEntry).filter(
-                TournamentEntry.user_id == current_user.id,
-                TournamentEntry.tournament_id == free_tournament.id
-            ).first()
-        
         target = db.query(AttentionTarget).filter(AttentionTarget.id == trade.target_id).first()
         if not target:
             raise HTTPException(status_code=404, detail="Target not found")
         
-        # Use tournament balance, not user's general balance
-        tournament_balance = get_user_tournament_balance(current_user.id, active_tournament_entry.tournament_id, db)
-        
+        # Convert to Decimal for precise calculations
+        from decimal import Decimal
         trade_amount = Decimal(str(abs(trade.shares) * 10))
         current_score = Decimal(str(target.current_attention_score))
+        pnl = Decimal('0.0')
         
-        if tournament_balance < trade_amount:
-            raise HTTPException(status_code=400, detail=f"Insufficient tournament balance. Need ${trade_amount}, have ${tournament_balance}")
+        logger.info(f"💱 Trade: {trade.trade_type} {trade.shares} units of {target.name} (${trade_amount})")
         
-        # FIX 1: Only deduct trade amount from tournament balance, not full position amount
         if trade.trade_type == "buy":  # LONG position
+            if current_user.balance < trade_amount:
+                raise HTTPException(status_code=400, detail=f"Insufficient balance. Need ${trade_amount}, have ${current_user.balance}")
+            
+            current_user.balance -= trade_amount
+            
+            # Update or create LONG portfolio position
             portfolio = db.query(Portfolio).filter(
                 Portfolio.user_id == current_user.id,
                 Portfolio.target_id == target.id,
-                Portfolio.tournament_id == active_tournament_entry.tournament_id,
                 Portfolio.position_type == "long"
             ).first()
             
             if portfolio:
-                # Update existing position with weighted average
+                # Update existing position - all Decimal math
                 total_stakes = portfolio.attention_stakes + trade_amount
                 weighted_avg = (portfolio.attention_stakes * portfolio.average_entry_score + trade_amount * current_score) / total_stakes
                 portfolio.average_entry_score = weighted_avg
@@ -859,7 +842,6 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
                 portfolio = Portfolio(
                     user_id=current_user.id,
                     target_id=target.id,
-                    tournament_id=active_tournament_entry.tournament_id,
                     attention_stakes=trade_amount,
                     average_entry_score=current_score,
                     position_type="long"
@@ -867,56 +849,55 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
                 db.add(portfolio)
         
         elif trade.trade_type == "sell":  # SHORT position
-            portfolio = db.query(Portfolio).filter(
+            if current_user.balance < trade_amount:
+                raise HTTPException(status_code=400, detail=f"Insufficient balance. Need ${trade_amount}, have ${current_user.balance}")
+            
+            current_user.balance -= trade_amount
+            
+            # Create or update SHORT position
+            short_portfolio = db.query(Portfolio).filter(
                 Portfolio.user_id == current_user.id,
                 Portfolio.target_id == target.id,
-                Portfolio.tournament_id == active_tournament_entry.tournament_id,
                 Portfolio.position_type == "short"
             ).first()
             
-            if portfolio:
-                # Update existing short position
-                total_stakes = portfolio.attention_stakes + trade_amount
-                weighted_avg = (portfolio.attention_stakes * portfolio.average_entry_score + trade_amount * current_score) / total_stakes
-                portfolio.average_entry_score = weighted_avg
-                portfolio.attention_stakes = total_stakes
+            if short_portfolio:
+                # Update existing short position - all Decimal math
+                total_stakes = short_portfolio.attention_stakes + trade_amount
+                weighted_avg = (short_portfolio.attention_stakes * short_portfolio.average_entry_score + trade_amount * current_score) / total_stakes
+                short_portfolio.average_entry_score = weighted_avg
+                short_portfolio.attention_stakes = total_stakes
             else:
                 # Create new SHORT position
-                portfolio = Portfolio(
+                short_portfolio = Portfolio(
                     user_id=current_user.id,
                     target_id=target.id,
-                    tournament_id=active_tournament_entry.tournament_id,
                     attention_stakes=trade_amount,
                     average_entry_score=current_score,
                     position_type="short"
                 )
-                db.add(portfolio)
+                db.add(short_portfolio)
         
-        # Record the trade with tournament context
+        # Record the trade
         new_trade = Trade(
             user_id=current_user.id,
             target_id=target.id,
-            tournament_id=active_tournament_entry.tournament_id,
             trade_type=f"stake_{trade.trade_type}",
             position_type="long" if trade.trade_type == "buy" else "short",
             stake_amount=trade_amount,
             attention_score_at_entry=current_score,
-            pnl=Decimal('0.0')  # No P&L on opening position
+            pnl=pnl
         )
         db.add(new_trade)
-        
-        # FIX 1: Update tournament balance correctly (deduct only trade amount)
-        active_tournament_entry.current_balance -= trade_amount
         
         db.commit()
         
         return {
             "message": f"{'Long' if trade.trade_type == 'buy' else 'Short'} position opened successfully",
-            "tournament_balance": float(active_tournament_entry.current_balance),
+            "balance": float(current_user.balance),
             "total_amount": float(trade_amount),
             "trade_id": new_trade.id,
-            "position_type": "long" if trade.trade_type == "buy" else "short",
-            "tournament_id": active_tournament_entry.tournament_id
+            "position_type": "long" if trade.trade_type == "buy" else "short"
         }
         
     except Exception as e:
@@ -927,82 +908,68 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
 @app.post("/trade/close/{target_id}")
 def close_position(
     target_id: int,
-    position_type: str,
-    amount: Optional[float] = None,
+    position_type: str,  # "long" or "short" 
+    amount: Optional[float] = None,  # If None, close entire position
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
-    """Close position with correct P&L calculation and balance updates"""
-    try:
-        target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
-        if not target:
-            raise HTTPException(status_code=404, detail="Target not found")
-        
-        # Get active tournament
-        active_tournament_entry = get_active_tournament_entry(current_user.id, db)
-        if not active_tournament_entry:
-            raise HTTPException(status_code=400, detail="No active tournament found")
-        
-        portfolio = db.query(Portfolio).filter(
-            Portfolio.user_id == current_user.id,
-            Portfolio.target_id == target_id,
-            Portfolio.tournament_id == active_tournament_entry.tournament_id,
-            Portfolio.position_type == position_type
-        ).first()
-        
-        if not portfolio:
-            raise HTTPException(status_code=404, detail=f"No {position_type} position found")
-        
-        close_amount = Decimal(str(amount * 10 if amount else portfolio.attention_stakes))
-        
-        if close_amount > portfolio.attention_stakes:
-            raise HTTPException(status_code=400, detail="Cannot close more than position size")
-        
-        # FIX 1: Calculate P&L correctly
-        score_ratio = target.current_attention_score / portfolio.average_entry_score if portfolio.average_entry_score > 0 else 1
-        
-        if position_type == "long":
-            # Long profits when score goes up
-            pnl = close_amount * (score_ratio - 1)
-        else:
-            # Short profits when score goes down  
-            pnl = close_amount * (1 - score_ratio)
-        
-        # FIX 1: Return original investment PLUS P&L to tournament balance
-        active_tournament_entry.current_balance += close_amount + pnl
-        
-        # Update position
-        portfolio.attention_stakes -= close_amount
-        if portfolio.attention_stakes <= 0:
-            db.delete(portfolio)
-        
-        # Record close trade
-        close_trade = Trade(
-            user_id=current_user.id,
-            target_id=target_id,
-            tournament_id=active_tournament_entry.tournament_id,
-            trade_type=f"close_{position_type}",
-            position_type=position_type,
-            stake_amount=close_amount,
-            attention_score_at_entry=target.current_attention_score,
-            pnl=pnl
-        )
-        db.add(close_trade)
-        
-        db.commit()
-        
-        return {
-            "message": f"{position_type.title()} position closed",
-            "pnl": float(pnl),
-            "tournament_balance": float(active_tournament_entry.current_balance),
-            "closed_amount": float(close_amount),
-            "tournament_id": active_tournament_entry.tournament_id
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Close position error: {e}")
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Close position failed: {str(e)}")
+    """Close a specific position (long or short)"""
+    target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="Target not found")
+    
+    portfolio = db.query(Portfolio).filter(
+        Portfolio.user_id == current_user.id,
+        Portfolio.target_id == target_id,
+        Portfolio.position_type == position_type
+    ).first()
+    
+    if not portfolio:
+        raise HTTPException(status_code=404, detail=f"No {position_type} position found")
+    
+    # Determine close amount
+    close_amount = Decimal(str((amount or portfolio.attention_stakes / 10) * 10))
+    
+    if close_amount > portfolio.attention_stakes:
+        raise HTTPException(status_code=400, detail="Cannot close more than position size")
+    
+    # Calculate P&L
+    score_ratio = target.current_attention_score / portfolio.average_entry_score if portfolio.average_entry_score > 0 else 1
+    
+    if position_type == "long":
+        # Long profits when score goes up
+        pnl = close_amount * (score_ratio - 1)
+    else:
+        # Short profits when score goes down
+        pnl = close_amount * (1 - score_ratio)
+    
+    # Return money + P&L
+    current_user.balance += close_amount + pnl
+    
+    # Reduce or remove position
+    portfolio.attention_stakes -= close_amount
+    if portfolio.attention_stakes <= 0:
+        db.delete(portfolio)
+    
+    # Record the close trade
+    close_trade = Trade(
+        user_id=current_user.id,
+        target_id=target_id,
+        trade_type=f"close_{position_type}",
+        stake_amount=close_amount,
+        attention_score_at_entry=target.current_attention_score,
+        pnl=pnl
+    )
+    db.add(close_trade)
+    
+    db.commit()
+    
+    return {
+        "message": f"{position_type.title()} position closed",
+        "pnl": float(pnl),
+        "balance": float(current_user.balance),
+        "closed_amount": float(close_amount)
+    }
 
 # Add this function to handle "flatten" operations
 @app.post("/trade/flatten/{target_id}")
@@ -1087,42 +1054,40 @@ def flatten_position(
 
 @app.get("/portfolio")
 def get_portfolio(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Get user's portfolio with correct P&L calculations"""
+    """Get user's portfolio - FIXED for decimal/float mixing"""
     try:
-        # Get all positions across all active tournaments
         positions = db.query(Portfolio).filter(
             Portfolio.user_id == current_user.id
-        ).join(Tournament).filter(
-            Tournament.is_active == True,
-            Tournament.is_finished == False
         ).all()
         
         portfolio_data = []
-        total_position_value = 0.0
-        total_unrealized_pnl = 0.0
+        total_value = 0.0
+        daily_pnl = 0.0
         
         for position in positions:
             target = position.target
             
+            # Convert ALL values to float immediately to avoid mixing
             attention_stakes = float(position.attention_stakes)
             average_entry_score = float(position.average_entry_score) if position.average_entry_score else 1.0
             current_attention_score = float(target.current_attention_score)
             
-            # Calculate position value and P&L
+            # All calculations as float
             score_ratio = current_attention_score / average_entry_score if average_entry_score > 0 else 1.0
             
+            # Get position type safely
             position_type = getattr(position, 'position_type', 'long')
             
             if position_type == "long":
-                # Long position value = stakes * score_ratio
+                # Long profits when score goes up
                 current_value = attention_stakes * score_ratio
-                unrealized_pnl = current_value - attention_stakes
+                pnl = current_value - attention_stakes
             else:
-                # Short position value = stakes * (2 - score_ratio) 
+                # Short profits when score goes down  
                 current_value = attention_stakes * (2.0 - score_ratio)
-                unrealized_pnl = current_value - attention_stakes
+                pnl = current_value - attention_stakes
             
-            pnl_percent = (unrealized_pnl / attention_stakes) * 100.0 if attention_stakes > 0 else 0.0
+            pnl_percent = (pnl / attention_stakes) * 100.0 if attention_stakes > 0 else 0.0
             
             portfolio_data.append({
                 "target": {
@@ -1132,180 +1097,41 @@ def get_portfolio(current_user: User = Depends(get_current_user), db: Session = 
                     "current_attention_score": current_attention_score
                 },
                 "target_id": target.id,
-                "tournament_id": position.tournament_id,
                 "attention_stakes": attention_stakes,
                 "average_entry_score": average_entry_score,
                 "current_value": current_value,
-                "unrealized_pnl": unrealized_pnl,
+                "pnl": pnl,
                 "pnl_percent": pnl_percent,
-                "position_type": position_type
+                "position_type": position_type,
+                # Legacy compatibility
+                "shares_owned": attention_stakes / 10.0,
+                "position_value": current_value
             })
-            
-            total_position_value += current_value
-            total_unrealized_pnl += unrealized_pnl
+            total_value += current_value
         
-        # FIX 2: Calculate total P&L from realized trades
+        # Calculate today's PnL from trades
         today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow = today + timedelta(days=1)
+        
         today_trades = db.query(Trade).filter(
             Trade.user_id == current_user.id,
             Trade.timestamp >= today,
-            Trade.pnl.isnot(None)
+            Trade.timestamp < tomorrow
         ).all()
         
-        realized_daily_pnl = sum(float(trade.pnl) for trade in today_trades)
-        
-        # Get tournament balances
-        tournament_entries = db.query(TournamentEntry).filter(
-            TournamentEntry.user_id == current_user.id
-        ).join(Tournament).filter(
-            Tournament.is_active == True,
-            Tournament.is_finished == False
-        ).all()
-        
-        total_cash_balance = sum(float(entry.current_balance) for entry in tournament_entries)
+        daily_pnl = sum(float(trade.pnl or 0) for trade in today_trades)
         
         return {
             "positions": portfolio_data,
-            "total_position_value": total_position_value,
-            "total_unrealized_pnl": total_unrealized_pnl,
-            "realized_daily_pnl": realized_daily_pnl,
-            "total_daily_pnl": realized_daily_pnl + total_unrealized_pnl,  # FIX 2: Correct total P&L
-            "total_cash_balance": total_cash_balance,
-            "total_portfolio_value": total_position_value + total_cash_balance
+            "total_value": total_value,
+            "daily_pnl": daily_pnl,
+            "cash_balance": float(current_user.balance),
+            "total_portfolio_value": total_value + float(current_user.balance)
         }
         
     except Exception as e:
         logger.error(f"❌ Portfolio error: {e}")
         raise HTTPException(status_code=500, detail=f"Portfolio error: {str(e)}")
-    
-def auto_join_free_tournament(user_id: int, db: Session):
-    """Auto-join user to free tournament if not in any active tournament"""
-    try:
-        # Check if user already in active tournament
-        existing_entry = db.query(TournamentEntry).filter(
-            TournamentEntry.user_id == user_id
-        ).join(Tournament).filter(
-            Tournament.is_active == True,
-            Tournament.is_finished == False,
-            Tournament.start_date <= datetime.utcnow(),
-            Tournament.end_date >= datetime.utcnow()
-        ).first()
-        
-        if existing_entry:
-            return existing_entry.tournament
-        
-        # FIX 3: Auto-seed free tournaments - find or create free tournament
-        free_tournament = db.query(Tournament).filter(
-            Tournament.entry_fee == 0,
-            Tournament.is_active == True,
-            Tournament.is_finished == False,
-            Tournament.end_date >= datetime.utcnow()
-        ).first()
-        
-        if not free_tournament:
-            # Create new free tournament
-            start_time = datetime.utcnow()
-            end_time = start_time + timedelta(days=1)  # 1 day duration
-            
-            free_tournament = Tournament(
-                name="🆓 Free Practice Tournament (Auto-Generated)",
-                target_type=TargetType.CELEBRITY,  # Mixed targets
-                duration=TournamentDuration.DAILY,
-                entry_fee=Decimal('0.00'),
-                prize_pool=Decimal('0.00'),
-                participant_count=0,
-                start_date=start_time,
-                end_date=end_time,
-                is_active=True,
-                is_finished=False
-            )
-            db.add(free_tournament)
-            db.commit()
-            db.refresh(free_tournament)
-        
-        # Join user to free tournament
-        tournament_entry = TournamentEntry(
-            user_id=user_id,
-            tournament_id=free_tournament.id,
-            entry_fee=Decimal('0.00'),
-            starting_balance=Decimal('10000.00'),
-            current_balance=Decimal('10000.00')
-        )
-        db.add(tournament_entry)
-        
-        # Update participant count
-        free_tournament.participant_count += 1
-        
-        db.commit()
-        logger.info(f"Auto-joined user {user_id} to free tournament {free_tournament.id}")
-        
-        return free_tournament
-        
-    except Exception as e:
-        logger.error(f"❌ Auto-join free tournament error: {e}")
-        db.rollback()
-        return None
-
-def get_active_tournament_entry(user_id: int, db: Session):
-    """Get user's active tournament entry"""
-    return db.query(TournamentEntry).filter(
-        TournamentEntry.user_id == user_id
-    ).join(Tournament).filter(
-        Tournament.is_active == True,
-        Tournament.is_finished == False,
-        Tournament.start_date <= datetime.utcnow(),
-        Tournament.end_date >= datetime.utcnow()
-    ).first()
-
-def get_user_tournament_balance(user_id: int, tournament_id: int, db: Session):
-    """Get user's current balance in specific tournament"""
-    entry = db.query(TournamentEntry).filter(
-        TournamentEntry.user_id == user_id,
-        TournamentEntry.tournament_id == tournament_id
-    ).first()
-    
-    if not entry:
-        return Decimal('0.00')
-    
-    return entry.current_balance
-
-# FIX 3: Auto-seed free tournaments on startup
-def ensure_free_tournaments_exist(db: Session):
-    """Ensure there are always free tournaments available"""
-    try:
-        # Check if any free tournament exists
-        existing_free = db.query(Tournament).filter(
-            Tournament.entry_fee == 0,
-            Tournament.is_active == True,
-            Tournament.is_finished == False,
-            Tournament.end_date >= datetime.utcnow()
-        ).count()
-        
-        if existing_free < 2:  # Always keep at least 2 free tournaments
-            for i in range(2 - existing_free):
-                start_time = datetime.utcnow() + timedelta(minutes=i*30)  # Stagger start times
-                end_time = start_time + timedelta(days=1)
-                
-                tournament = Tournament(
-                    name=f"🆓 Free Practice Tournament #{i+1}",
-                    target_type=list(TargetType)[i % len(TargetType)],  # Rotate target types
-                    duration=TournamentDuration.DAILY,
-                    entry_fee=Decimal('0.00'),
-                    prize_pool=Decimal('0.00'),
-                    participant_count=0,
-                    start_date=start_time,
-                    end_date=end_time,
-                    is_active=True,
-                    is_finished=False
-                )
-                db.add(tournament)
-                logger.info(f"Created seeded free tournament: {tournament.name}")
-        
-        db.commit()
-        
-    except Exception as e:
-        logger.error(f"❌ Error seeding free tournaments: {e}")
-        db.rollback()
 
 @app.get("/user/tournament-balances")
 def get_tournament_balances(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -1767,12 +1593,6 @@ async def startup_event():
         logger.info("🧅 Tor proxy enabled for Google Trends requests")
     else:
         logger.info("🔗 Direct connections enabled for Google Trends requests")
-
-    db = SessionLocal()
-    try:
-        ensure_free_tournaments_exist(db)
-    finally:
-        db.close()
     
     # Start background tasks for real-time updates
     await start_background_tasks()

@@ -1,14 +1,13 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import Chart from 'chart.js/auto';
-  import apiFetch from '$lib/api';
+  import apiFetch from '$lib/api'; // FIX: Import the API utility
 
   export let targetId;
   export let targetName = '';
   export let height = '400px';
   export let showTimeframeSelector = true;
-  export let autoUpdate = true;
-  export let showPositionInfo = true; // FIX 5: Show position info with real-time updates
+  export let autoUpdate = true; // Enable real-time updates
 
   let chartCanvas = null;
   let chart = null;
@@ -19,15 +18,6 @@
   let websocket = null;
   let lastUpdate = null;
   let isConnected = false;
-  let updateInterval = null;
-  
-  // FIX 5: Position tracking
-  let userPosition = null;
-  let positionPnL = 0;
-  let positionValue = 0;
-
-  const UPDATE_INTERVAL = 15000; // 15 seconds for position updates
-  const CHART_UPDATE_INTERVAL = 60000; // 1 minute for chart data
 
   const timeframes = [
     { value: '1', label: '1D', description: '1 Day' },
@@ -40,16 +30,11 @@
   ];
 
   onMount(async () => {
-    console.log('AttentionChart mounted with targetId:', targetId);
-    
+    console.log('AttentionChart mounted with targetId:', targetId); // Debug log
     if (targetId) {
-      await Promise.all([
-        loadChart(),
-        loadUserPosition() // FIX 5: Load user position data
-      ]);
-      
+      await loadChart();
       if (autoUpdate) {
-        setupRealTimeUpdates(); // FIX 5: Enhanced real-time updates
+        connectWebSocket();
       }
     } else {
       console.error('AttentionChart: No targetId provided');
@@ -58,166 +43,175 @@
     }
   });
 
-  onDestroy(() => {
-    destroyChart();
-    if (websocket) {
-      websocket.close();
-    }
-    if (updateInterval) {
-      clearInterval(updateInterval);
-    }
-  });
-
-  // FIX 5: Load user's position in this target
-  async function loadUserPosition() {
-    if (!showPositionInfo) return;
-    
-    try {
-      const portfolioData = await apiFetch('/portfolio');
-      
-      // Find position for this target
-      const position = portfolioData.positions?.find(p => p.target_id == targetId);
-      
-      if (position) {
-        userPosition = position;
-        positionValue = position.current_value;
-        positionPnL = position.unrealized_pnl;
-        console.log(`📊 User position in ${targetName}:`, position);
-      } else {
-        userPosition = null;
-        positionValue = 0;
-        positionPnL = 0;
-      }
-    } catch (err) {
-      console.error('Failed to load user position:', err);
-      // Don't show error for position loading failure
-    }
-  }
-
-  // FIX 5: Enhanced real-time updates
-  function setupRealTimeUpdates() {
-    if (updateInterval) clearInterval(updateInterval);
-    
-    // Update position info more frequently
-    updateInterval = setInterval(async () => {
-      await loadUserPosition();
-      
-      // Update chart data less frequently to avoid API spam
-      if (lastUpdate && (Date.now() - lastUpdate.getTime()) > CHART_UPDATE_INTERVAL) {
-        await loadChart();
-      }
-    }, UPDATE_INTERVAL);
-
-    // Try WebSocket connection for real-time price updates
-    connectWebSocket();
-  }
-
-  function connectWebSocket() {
-    if (!targetId || websocket?.readyState === WebSocket.OPEN) return;
-
-    try {
-      const wsUrl = `ws://localhost:8000/ws/attention/${targetId}`;
-      websocket = new WebSocket(wsUrl);
-      
-      websocket.onopen = () => {
-        console.log(`📡 WebSocket connected for target ${targetId}`);
-        isConnected = true;
-      };
-      
-      websocket.onmessage = (event) => {
-        handleRealTimeUpdate(JSON.parse(event.data));
-      };
-      
-      websocket.onclose = () => {
-        console.log('📡 WebSocket disconnected');
-        isConnected = false;
-        // Reconnect after 5 seconds
-        setTimeout(() => {
-          if (autoUpdate) connectWebSocket();
-        }, 5000);
-      };
-      
-      websocket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        isConnected = false;
-      };
-    } catch (err) {
-      console.error('WebSocket connection failed:', err);
-      isConnected = false;
-    }
-  }
-
-  function handleRealTimeUpdate(data) {
-    if (data.target_id != targetId) return;
-    
-    console.log(`📈 Real-time update: ${data.attention_score}%`);
-    
-    lastUpdate = new Date(data.timestamp);
-    
-    // FIX 5: Update position value in real-time when score changes
-    if (userPosition && data.attention_score) {
-      updatePositionValue(data.attention_score);
-    }
-    
-    // Update chart if it exists
-    if (chart && chartData) {
-      const newDataPoint = {
-        timestamp: data.timestamp,
-        attention_score: data.attention_score,
-        data_source: 'real_time'
-      };
-      
-      chartData.data.push(newDataPoint);
-      
-      // Keep only recent data points for the selected timeframe
-      const cutoffDate = new Date();
-      cutoffDate.setDate(cutoffDate.getDate() - parseInt(selectedTimeframe));
-      
-      chartData.data = chartData.data.filter(point => 
-        new Date(point.timestamp) >= cutoffDate
-      );
-      
-      updateChartData();
-      updateSummaryStats();
-      
-      if (chart) {
-        chart.update('none');
-      }
-    }
-  }
-
-  // FIX 5: Calculate real-time position value updates
-  function updatePositionValue(newAttentionScore) {
-    if (!userPosition) return;
-    
-    const currentScore = parseFloat(newAttentionScore);
-    const entryScore = userPosition.average_entry_score;
-    const stakes = userPosition.attention_stakes;
-    const positionType = userPosition.position_type;
-    
-    if (entryScore && stakes) {
-      const scoreRatio = currentScore / entryScore;
-      
-      if (positionType === "long") {
-        positionValue = stakes * scoreRatio;
-        positionPnL = positionValue - stakes;
-      } else if (positionType === "short") {
-        positionValue = stakes * (2.0 - scoreRatio);
-        positionPnL = positionValue - stakes;
-      }
-    }
-  }
-
   // Reactive statement to render chart when both canvas and data are ready
   $: if (chartCanvas && chartData && chartData.data && chartData.data.length > 0) {
     console.log('📊 Reactive render: Canvas and data both ready');
     renderChart(chartData);
   }
 
-  $: if (targetId && targetId !== chartData?.target?.id) {
-    console.log('📊 Target ID changed, reloading chart');
+  $: if (targetId) {
+    console.log('Target ID changed to:', targetId);
     loadChart();
-    loadUserPosition(); // FIX 5: Reload position when target changes
+  }
+
+  onDestroy(() => {
+    destroyChart();
+    disconnectWebSocket();
+  });
+
+  async function connectWebSocket() {
+    if (!targetId || websocket) return;
+    
+    try {
+      // const wsUrl = `ws://localhost:8000/ws/targets/${targetId}`;
+      const wsUrl = `ws://localhost:8000/ws/${targetId}`;
+      websocket = new WebSocket(wsUrl);
+      
+      websocket.onopen = () => {
+        isConnected = true;
+        console.log(`✅ WebSocket connected for target ${targetId}`);
+      };
+      
+      websocket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleRealtimeUpdate(data);
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error);
+        }
+      };
+      
+      websocket.onclose = () => {
+        isConnected = false;
+        console.log(`🔌 WebSocket disconnected for target ${targetId}`);
+        
+        // Attempt to reconnect after 5 seconds
+        if (autoUpdate) {
+          setTimeout(() => {
+            connectWebSocket();
+          }, 5000);
+        }
+      };
+      
+      websocket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        isConnected = false;
+      };
+      
+    } catch (error) {
+      console.error('Failed to connect WebSocket:', error);
+    }
+  }
+
+  function disconnectWebSocket() {
+    if (websocket) {
+      websocket.close();
+      websocket = null;
+      isConnected = false;
+    }
+  }
+
+  function handleRealtimeUpdate(data) {
+    if (data.type === 'attention_update' || data.type === 'forced_update') {
+      console.log(`📈 Real-time update: ${data.attention_score}%`);
+      
+      lastUpdate = new Date(data.timestamp);
+      
+      // Add new data point to chart if it exists
+      if (chart && chartData) {
+        const newDataPoint = {
+          timestamp: data.timestamp,
+          attention_score: data.attention_score,
+          data_source: 'google_trends_api'
+        };
+        
+        // Add to chart data
+        chartData.data.push(newDataPoint);
+        
+        // Keep only recent data points for the selected timeframe
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - parseInt(selectedTimeframe));
+        
+        chartData.data = chartData.data.filter(point => 
+          new Date(point.timestamp) >= cutoffDate
+        );
+        
+        // Update the chart
+        updateChartData();
+        
+        // Update summary statistics
+        updateSummaryStats();
+
+        // FIX: Force chart refresh - add this line to ensure the chart actually updates
+        if (chart) {
+          chart.update('none'); // Force immediate chart update without animation
+        }
+      }
+    }
+  }
+
+  function updateChartData() {
+    if (!chart || !chartData) return;
+    
+    // No more client-side filtering - just display the data from backend
+    const labels = chartData.data.map(point => {
+      const date = new Date(point.timestamp);
+      
+      // Adjust label format based on sampling granularity
+      const samplingInfo = chartData.sampling_info;
+      
+      if (samplingInfo?.granularity?.includes('minutes') || selectedTimeframe <= 1) {
+        // For minute/hourly data, show time
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric', 
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      } else if (samplingInfo?.granularity?.includes('hour') || selectedTimeframe <= 7) {
+        // For hourly data, show date + hour
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric', 
+          hour: '2-digit' 
+        });
+      } else if (selectedTimeframe <= 365) {
+        // For daily/weekly data, show date only
+        return date.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric' 
+        });
+      } else {
+        // For monthly/yearly data, show month/year
+        return date.toLocaleDateString('en-US', { 
+          year: 'numeric', 
+          month: 'short' 
+        });
+      }
+    });
+    
+    const attentionData = chartData.data.map(point => parseFloat(point.attention_score));
+    
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = attentionData;
+    chart.update('none'); // Update without animation for real-time feel
+  }
+
+  function updateSummaryStats() {
+    if (!chartData || !chartData.data.length) return;
+    
+    // Calculate stats from the sampled data (which is representative)
+    const scores = chartData.data.map(point => parseFloat(point.attention_score));
+    chartData.summary = {
+      average: Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100,
+      max: Math.max(...scores),
+      min: Math.min(...scores),
+      latest: scores[scores.length - 1],
+      change_percent: scores.length > 1 ? 
+        Math.round(((scores[scores.length - 1] - scores[0]) / scores[0] * 100) * 100) / 100 : 0,
+      data_points: chartData.sampling_info?.total_points_available || scores.length,
+      sampled_points: scores.length
+    };
   }
 
   async function loadChart() {
@@ -233,17 +227,20 @@
     console.log(`Loading chart for targetId: ${targetId}, timeframe: ${selectedTimeframe} days`);
 
     try {
+      // Backend now handles intelligent sampling based on timeframe
       chartData = await apiFetch(`/targets/${targetId}/chart?days=${selectedTimeframe}`);
       
       console.log('Chart data received:', chartData);
       console.log(`📊 Sampling info:`, chartData?.sampling_info);
       
+      // Verify we have data
       if (!chartData || !chartData.data || chartData.data.length === 0) {
         throw new Error('No chart data available');
       }
       
       console.log(`✅ Loaded ${chartData.data.length} data points for ${chartData.target?.name} (${chartData.sampling_info?.granularity})`);
       
+      // Render chart immediately - canvas should be available
       renderChart(chartData);
     } catch (err) {
       error = err.message;
@@ -259,199 +256,142 @@
     console.log(`Changing timeframe from ${selectedTimeframe} to ${newTimeframe} days`);
     selectedTimeframe = newTimeframe;
     
+    // Simply reload chart with new timeframe - backend handles the rest
     await loadChart();
   }
 
   function renderChart(data) {
-    destroyChart();
+      destroyChart();
 
-    if (!chartCanvas) {
-      console.error('Cannot render chart: canvas element not available');
-      return;
-    }
-
-    if (!data || !data.data || data.data.length === 0) {
-      console.error('Cannot render chart: no data available', data);
-      return;
-    }
-
-    console.log(`📊 Rendering chart with ${data.data.length} intelligently sampled data points`);
-    console.log(`🎯 Granularity: ${data.sampling_info?.granularity}, Total available: ${data.sampling_info?.total_points_available}`);
-
-    const ctx = chartCanvas.getContext('2d');
-    
-    const labels = data.data.map(point => {
-      const date = new Date(point.timestamp);
-      const samplingInfo = data.sampling_info;
-      
-      if (samplingInfo?.granularity?.includes('minutes') || selectedTimeframe <= 1) {
-        return date.toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric', 
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-      } else if (samplingInfo?.granularity?.includes('hour') || selectedTimeframe <= 7) {
-        return date.toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric', 
-          hour: '2-digit' 
-        });
-      } else if (selectedTimeframe <= 365) {
-        return date.toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric' 
-        });
-      } else {
-        return date.toLocaleDateString('en-US', { 
-          year: 'numeric', 
-          month: 'short' 
-        });
+      if (!chartCanvas) {
+        console.error('Cannot render chart: canvas element not available');
+        return;
       }
-    });
 
-    const attentionData = data.data.map(point => parseFloat(point.attention_score));
+      if (!data || !data.data || data.data.length === 0) {
+        console.error('Cannot render chart: no data available', data);
+        return;
+      }
 
-    // Create gradient
-    const gradient = ctx.createLinearGradient(0, 0, 0, 400);
-    gradient.addColorStop(0, 'rgba(59, 130, 246, 0.3)');
-    gradient.addColorStop(1, 'rgba(59, 130, 246, 0.05)');
+      console.log(`📊 Rendering chart with ${data.data.length} intelligently sampled data points`);
+      console.log(`🎯 Granularity: ${data.sampling_info?.granularity}, Total available: ${data.sampling_info?.total_points_available}`);
 
-    const pointRadius = data.data.length <= 50 ? 4 : data.data.length <= 100 ? 3 : 2;
-
-    chart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: labels,
-        datasets: [{
-          label: `${data.target?.name || targetName} Attention Score`,
-          data: attentionData,
-          borderColor: 'rgb(59, 130, 246)',
-          backgroundColor: gradient,
-          borderWidth: 2,
-          fill: true,
-          tension: 0.1,
-          pointRadius: pointRadius,
-          pointHoverRadius: pointRadius + 2,
-          pointBackgroundColor: 'rgb(59, 130, 246)',
-          pointBorderColor: 'white',
-          pointBorderWidth: 1
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            display: false
-          },
-          tooltip: {
-            mode: 'index',
-            intersect: false,
-            backgroundColor: 'rgba(0, 0, 0, 0.8)',
-            titleColor: 'white',
-            bodyColor: 'white',
-            borderColor: 'rgb(59, 130, 246)',
-            borderWidth: 1,
-            callbacks: {
-              title: function(context) {
-                return labels[context[0].dataIndex];
-              },
-              label: function(context) {
-                return `Attention: ${context.parsed.y.toFixed(1)}%`;
-              }
-            }
-          }
-        },
-        scales: {
-          x: {
-            display: true,
-            grid: {
-              display: false
-            },
-            ticks: {
-              color: 'rgba(156, 163, 175, 0.7)',
-              maxTicksLimit: 8
-            }
-          },
-          y: {
-            display: true,
-            grid: {
-              color: 'rgba(75, 85, 99, 0.2)'
-            },
-            ticks: {
-              color: 'rgba(156, 163, 175, 0.7)',
-              callback: function(value) {
-                return value.toFixed(0) + '%';
-              }
-            },
-            beginAtZero: false
-          }
-        },
-        interaction: {
-          intersect: false,
-          mode: 'index'
+      const ctx = chartCanvas.getContext('2d');
+      
+      const labels = data.data.map(point => {
+        const date = new Date(point.timestamp);
+        const samplingInfo = data.sampling_info;
+        
+        // Dynamic label formatting based on granularity
+        if (samplingInfo?.granularity?.includes('minutes') || selectedTimeframe <= 1) {
+          return date.toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric', 
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+        } else if (samplingInfo?.granularity?.includes('hour') || selectedTimeframe <= 7) {
+          return date.toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric', 
+            hour: '2-digit' 
+          });
+        } else if (selectedTimeframe <= 365) {
+          return date.toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric' 
+          });
+        } else {
+          return date.toLocaleDateString('en-US', { 
+            year: 'numeric', 
+            month: 'short' 
+          });
         }
-      }
-    });
+      });
 
-    updateSummaryStats();
-  }
+      const attentionData = data.data.map(point => parseFloat(point.attention_score));
 
-  function updateChartData() {
-    if (!chart || !chartData) return;
-    
-    const labels = chartData.data.map(point => {
-      const date = new Date(point.timestamp);
-      const samplingInfo = chartData.sampling_info;
-      
-      if (samplingInfo?.granularity?.includes('minutes') || selectedTimeframe <= 1) {
-        return date.toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric', 
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-      } else if (samplingInfo?.granularity?.includes('hour') || selectedTimeframe <= 7) {
-        return date.toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric', 
-          hour: '2-digit' 
-        });
-      } else if (selectedTimeframe <= 365) {
-        return date.toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric' 
-        });
-      } else {
-        return date.toLocaleDateString('en-US', { 
-          year: 'numeric', 
-          month: 'short' 
-        });
-      }
-    });
-    
-    const attentionData = chartData.data.map(point => parseFloat(point.attention_score));
-    
-    chart.data.labels = labels;
-    chart.data.datasets[0].data = attentionData;
-    chart.update('none');
-  }
+      // Create gradient
+      const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+      gradient.addColorStop(0, 'rgba(59, 130, 246, 0.3)');
+      gradient.addColorStop(1, 'rgba(59, 130, 246, 0.05)');
 
-  function updateSummaryStats() {
-    if (!chartData || !chartData.data.length) return;
-    
-    const scores = chartData.data.map(point => parseFloat(point.attention_score));
-    chartData.summary = {
-      average: Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100,
-      max: Math.max(...scores),
-      min: Math.min(...scores),
-      latest: scores[scores.length - 1],
-      change_percent: scores.length > 1 ? 
-        Math.round(((scores[scores.length - 1] - scores[0]) / scores[0] * 100) * 100) / 100 : 0,
-      data_points: chartData.sampling_info?.total_points_available || scores.length,
-      sampled_points: scores.length
-    };
+      // Adjust point size based on number of points
+      const pointRadius = data.data.length <= 50 ? 4 : data.data.length <= 100 ? 3 : 2;
+
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Google Trends Score',
+              data: attentionData,
+              borderColor: 'rgb(59, 130, 246)',
+              backgroundColor: gradient,
+              borderWidth: 2,
+              tension: 0.4,
+              pointRadius: pointRadius,
+              pointHoverRadius: pointRadius + 2,
+              pointBackgroundColor: 'rgb(59, 130, 246)',
+              pointBorderColor: '#ffffff',
+              pointBorderWidth: 2,
+              fill: true
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: `${data.target.name} - Attention Trends (${data.sampling_info?.granularity || 'optimized sampling'})`,
+              color: '#F8FAFC',
+              font: {
+                size: 16,
+                weight: 'bold'
+              }
+            },
+            legend: {
+              display: false
+            }
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: '#CBD5E1',
+                maxTicksLimit: Math.min(12, Math.max(6, Math.floor(data.data.length / 5)))
+              },
+              grid: {
+                color: 'rgba(255, 255, 255, 0.1)'
+              }
+            },
+            y: {
+              type: 'linear',
+              display: true,
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Google Trends Score (0-100)',
+                color: '#CBD5E1'
+              },
+              ticks: {
+                color: '#CBD5E1'
+              },
+              grid: {
+                color: 'rgba(255, 255, 255, 0.1)'
+              },
+              min: 0,
+              max: 100
+            }
+          }
+        }
+      });
+
+      // Update summary stats after rendering
+      updateSummaryStats();
+      console.log('✅ Chart rendered successfully with intelligent sampling');
   }
 
   function destroyChart() {
@@ -461,171 +401,166 @@
     }
   }
 
-  function formatCurrency(value) {
-    if (!value && value !== 0) return '$0.00';
-    const abs = Math.abs(value);
-    const sign = value >= 0 ? '+' : '-';
-    return value >= 0 ? `$${abs.toFixed(2)}` : `-$${abs.toFixed(2)}`;
+  function getSelectedTimeframeName() {
+    const timeframe = timeframes.find(t => t.value === selectedTimeframe);
+    return timeframe ? timeframe.description : 'Unknown';
   }
 
-  function getPnLColorClass(value) {
-    if (!value && value !== 0) return 'text-gray-400';
-    return value >= 0 ? 'text-emerald-400' : 'text-red-400';
+  function formatTime(date) {
+    return date?.toLocaleTimeString('en-US', { 
+      hour: '2-digit', 
+      minute: '2-digit',
+      second: '2-digit'
+    });
   }
 </script>
 
 <div class="attention-chart-container">
-  <!-- Chart Header with Position Info -->
-  {#if showPositionInfo}
-    <div class="mb-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-4">
-          <h3 class="text-lg font-semibold text-white">
-            {targetName || chartData?.target?.name || 'Loading...'}
-          </h3>
-          {#if isConnected}
-            <div class="flex items-center gap-2 text-xs text-emerald-400">
-              <div class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
-              Live
+  <!-- Header with Real-time Status -->
+  {#if showTimeframeSelector}
+    <div class="mb-4">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <div class="flex items-center gap-3">
+            <h3 class="text-lg font-semibold text-white">
+              {targetName || (chartData?.target?.name ? `${chartData.target.name}` : 'Google Trends Chart')}
+            </h3>
+            
+            <!-- Real-time status indicator -->
+            {#if autoUpdate}
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full {isConnected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}"></div>
+                <span class="text-xs text-gray-400">
+                  {isConnected ? 'Live' : 'Offline'}
+                </span>
+              </div>
+            {/if}
+          </div>
+          
+          {#if chartData?.summary}
+            <div class="flex items-center gap-4 mt-1 text-sm text-gray-400">
+              <span>Latest: {chartData.summary.latest.toFixed(1)}%</span>
+              <span class="flex items-center gap-1">
+                Change: 
+                <span class="{chartData.summary.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'}">
+                  {chartData.summary.change_percent >= 0 ? '+' : ''}{chartData.summary.change_percent.toFixed(1)}%
+                </span>
+              </span>
+              <span>Avg: {chartData.summary.average.toFixed(1)}%</span>
+              {#if lastUpdate}
+                <span class="text-xs">Updated: {formatTime(lastUpdate)}</span>
+              {/if}
             </div>
           {/if}
         </div>
         
-        <!-- FIX 5: Real-time position display -->
-        {#if userPosition}
-          <div class="flex items-center gap-6 text-sm">
-            <div class="text-center">
-              <div class="text-gray-400 text-xs">Position</div>
-              <div class="font-semibold text-blue-400">
-                {userPosition.position_type.toUpperCase()}
-              </div>
-            </div>
-            <div class="text-center">
-              <div class="text-gray-400 text-xs">Stake</div>
-              <div class="font-semibold">
-                {formatCurrency(userPosition.attention_stakes)}
-              </div>
-            </div>
-            <div class="text-center">
-              <div class="text-gray-400 text-xs">Value</div>
-              <div class="font-semibold">
-                {formatCurrency(positionValue)}
-              </div>
-            </div>
-            <div class="text-center">
-              <div class="text-gray-400 text-xs">P&L</div>
-              <div class="font-semibold {getPnLColorClass(positionPnL)}">
-                {formatCurrency(positionPnL)}
-              </div>
-            </div>
-          </div>
-        {:else}
-          <div class="text-sm text-gray-400">
-            No position
-          </div>
-        {/if}
+        <!-- Timeframe Selector -->
+        <div class="flex bg-gray-800 rounded-lg p-1 shadow-inner">
+          {#each timeframes as timeframe}
+            <button
+              class="px-3 py-2 text-sm rounded-md transition-all duration-200 font-medium {
+                selectedTimeframe === timeframe.value 
+                  ? 'bg-blue-600 text-white shadow-md transform scale-[1.02]' 
+                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+              }"
+              on:click={() => changeTimeframe(timeframe.value)}
+              disabled={loading}
+              title={timeframe.description}
+            >
+              {timeframe.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+      
+      <!-- Data Source Info -->
+      <div class="flex items-center justify-between text-xs text-gray-500">
+        <div>
+          Showing {getSelectedTimeframeName()} of Google Trends data
+          {#if chartData?.sampling_info}
+            <span class="ml-2 px-2 py-1 bg-gray-800 rounded text-gray-300">
+              {chartData.sampling_info.points_returned} points
+              {#if chartData.sampling_info.total_points_available > chartData.sampling_info.points_returned}
+                (sampled from {chartData.sampling_info.total_points_available})
+              {/if}
+              • {chartData.sampling_info.granularity}
+            </span>
+          {:else if chartData?.data?.length}
+            ({chartData.data.length} data points)
+          {/if}
+        </div>
+        
+        <div class="flex items-center gap-1">
+          <svg class="w-3 h-3 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+          </svg>
+          <span>Intelligently Sampled Data</span>
+        </div>
       </div>
     </div>
   {/if}
 
-  <!-- Chart Content -->
-  <div class="chart-content" style="height: {height};">
+  <!-- Chart Container -->
+  <div class="relative bg-gray-900 rounded-lg p-4 shadow-lg border border-gray-800" style="height: {height}">
+    <!-- Always render canvas -->
+    <canvas bind:this={chartCanvas} class="w-full h-full"></canvas>
+    
+    <!-- Loading overlay -->
     {#if loading}
-      <div class="flex items-center justify-center h-full">
-        <div class="text-center">
-          <div class="w-8 h-8 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
-          <p class="text-gray-400">Loading attention data...</p>
+      <div class="absolute inset-0 flex items-center justify-center bg-gray-900/90">
+        <div class="flex flex-col items-center gap-3">
+          <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+          <span class="text-gray-400 text-sm">Loading chart for target {targetId}...</span>
         </div>
       </div>
-    {:else if error}
-      <div class="flex items-center justify-center h-full">
+    {/if}
+    
+    <!-- Error overlay -->
+    {#if error}
+      <div class="absolute inset-0 flex items-center justify-center bg-gray-900/90">
         <div class="text-center">
-          <div class="text-red-400 mb-2">⚠️ Error</div>
-          <p class="text-gray-400 text-sm">{error}</p>
-          <button class="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm" on:click={loadChart}>
+          <div class="text-red-400 mb-2">
+            <svg class="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.082 16.5c-.77.833.192 2.5 1.732 2.5z"></path>
+            </svg>
+          </div>
+          <div class="text-red-400 font-medium">{error}</div>
+          <div class="text-gray-400 text-sm mt-1">Target ID: {targetId}</div>
+          <button 
+            class="mt-2 text-blue-400 hover:text-blue-300 text-sm underline"
+            on:click={loadChart}
+          >
             Retry
           </button>
         </div>
       </div>
-    {:else}
-      <div class="chart-wrapper h-full">
-        <canvas bind:this={chartCanvas} class="w-full h-full"></canvas>
+    {/if}
+    
+    <!-- No data overlay -->
+    {#if !loading && !error && (!chartData?.data?.length)}
+      <div class="absolute inset-0 flex items-center justify-center bg-gray-900/90">
+        <div class="text-center text-gray-400">
+          <div class="text-4xl mb-2">📊</div>
+          <div>No Google Trends data available</div>
+          <div class="text-sm mt-1">Data is being collected for target {targetId}...</div>
+        </div>
       </div>
     {/if}
   </div>
-
-  <!-- Timeframe Selector -->
-  {#if showTimeframeSelector && !loading && !error}
-    <div class="flex justify-center mt-4 gap-1">
-      {#each timeframes as timeframe}
-        <button
-          class="px-3 py-1 text-xs rounded-md border transition-all duration-200 {
-            selectedTimeframe === timeframe.value 
-              ? 'bg-blue-600 border-blue-600 text-white' 
-              : 'border-gray-600 text-gray-300 hover:border-gray-500 hover:bg-gray-800'
-          }"
-          on:click={() => changeTimeframe(timeframe.value)}
-          title={timeframe.description}
-        >
-          {timeframe.label}
-        </button>
-      {/each}
-    </div>
-  {/if}
-
-  <!-- Chart Summary Stats -->
-  {#if chartData?.summary && !loading}
-    <div class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-      <div class="text-center p-2 bg-gray-800/30 rounded">
-        <div class="text-gray-400">Current</div>
-        <div class="font-semibold text-blue-400">{chartData.summary.latest.toFixed(1)}%</div>
-      </div>
-      <div class="text-center p-2 bg-gray-800/30 rounded">
-        <div class="text-gray-400">Change</div>
-        <div class="font-semibold {chartData.summary.change_percent >= 0 ? 'text-emerald-400' : 'text-red-400'}">
-          {chartData.summary.change_percent >= 0 ? '+' : ''}{chartData.summary.change_percent.toFixed(1)}%
-        </div>
-      </div>
-      <div class="text-center p-2 bg-gray-800/30 rounded">
-        <div class="text-gray-400">High</div>
-        <div class="font-semibold">{chartData.summary.max.toFixed(1)}%</div>
-      </div>
-      <div class="text-center p-2 bg-gray-800/30 rounded">
-        <div class="text-gray-400">Low</div>
-        <div class="font-semibold">{chartData.summary.min.toFixed(1)}%</div>
-      </div>
-    </div>
-  {/if}
 </div>
 
 <style>
   .attention-chart-container {
     width: 100%;
   }
-
-  .chart-content {
-    position: relative;
+  
+  button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
-
-  .chart-wrapper {
-    position: relative;
-  }
-
-  canvas {
-    display: block;
-  }
-
-  /* Real-time update animation */
-  .animate-pulse {
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-
+  
   @keyframes pulse {
-    0%, 100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: .5;
-    }
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
   }
 </style>
