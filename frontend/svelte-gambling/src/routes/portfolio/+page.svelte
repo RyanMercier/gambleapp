@@ -104,6 +104,63 @@
       console.error('Failed to reload portfolio:', error);
     }
   }
+
+  // Function to flatten all positions
+  let flattening = false;
+  async function flattenAllPositions() {
+    if (!portfolio || !portfolio.positions || portfolio.positions.length === 0 || flattening) return;
+
+    flattening = true;
+    try {
+      const results = [];
+
+      // Close all positions one by one
+      for (const position of portfolio.positions) {
+        if (position.attention_stakes > 0) {
+          try {
+            const result = await apiFetch(`/trade/close/${position.target.id}?position_type=${position.position_type}`, {
+              method: 'POST'
+            });
+            results.push({
+              target: position.target.name,
+              pnl: result.pnl || 0,
+              success: true
+            });
+          } catch (err) {
+            results.push({
+              target: position.target.name,
+              error: err.message,
+              success: false
+            });
+          }
+        }
+      }
+
+      // Calculate total P&L and show summary
+      const totalPnL = results.filter(r => r.success).reduce((sum, r) => sum + (r.pnl || 0), 0);
+      const successCount = results.filter(r => r.success).length;
+      const failureCount = results.filter(r => !r.success).length;
+
+      let message = `✅ Flattened ${successCount} positions`;
+      if (totalPnL !== 0) {
+        message += `\nTotal P&L: ${totalPnL >= 0 ? '+' : ''}$${totalPnL.toFixed(2)}`;
+      }
+      if (failureCount > 0) {
+        message += `\n⚠️ ${failureCount} positions failed to close`;
+      }
+
+      alert(message);
+
+      // Reload portfolio data
+      await loadPortfolioData();
+
+    } catch (err) {
+      alert('Failed to flatten positions: ' + (err.message || 'Unknown error'));
+      console.error('Flatten all positions error:', err);
+    } finally {
+      flattening = false;
+    }
+  }
 </script>
 
 <svelte:head>
@@ -178,7 +235,18 @@
     {#if !showTrades}
       <!-- Current Positions -->
       <div class="card">
-        <h2 class="text-xl font-semibold mb-4">🎯 Current Positions</h2>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-semibold">🎯 Current Positions</h2>
+          {#if portfolio.positions && portfolio.positions.length > 0}
+            <button
+              class="btn btn-warning btn-sm"
+              on:click={flattenAllPositions}
+              disabled={flattening}
+            >
+              {flattening ? '⏳' : '🔄'} Flatten All Positions
+            </button>
+          {/if}
+        </div>
         
         {#if portfolio.positions && portfolio.positions.length > 0}
           <div class="overflow-x-auto">

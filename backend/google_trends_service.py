@@ -573,21 +573,25 @@ class GoogleTrendsService:
             target.current_attention_score = Decimal(str(new_score))
             target.last_updated = datetime.utcnow()
             
-            # Store historical data - FIXED: Use only valid fields
-            current_utc = datetime.utcnow()
+            # Store historical data using Google's timestamp
+            # Get the latest timestamp from the Google response or fall back to UTC
+            google_timestamp = datetime.utcnow()  # fallback
+            if data.get('timeline_timestamps') and len(data['timeline_timestamps']) > 0:
+                # Use the most recent timestamp from Google's response
+                google_timestamp = data['timeline_timestamps'][-1]
+
             history_entry = AttentionHistory(
                 target_id=target.id,
                 attention_score=Decimal(str(new_score)),
-                timestamp=current_utc,
+                timestamp=google_timestamp,
                 data_source="google_trends_realtime",
-                timeframe_used="now 1-d", 
+                timeframe_used="now 1-d",
                 confidence_score=Decimal("1.0")
-                # REMOVED: metadata_json (not a valid field in the model)
             )
             db.add(history_entry)
             
             # Cleanup old data
-            cutoff = current_utc - timedelta(hours=48)
+            cutoff = datetime.utcnow() - timedelta(hours=48)
             deleted = db.query(AttentionHistory).filter(
                 AttentionHistory.target_id == target.id,
                 AttentionHistory.data_source == "google_trends_realtime",

@@ -168,11 +168,11 @@
   }
 
   async function flattenAllPositions() {
-    if (!target || submitting) return;
-    
-    // Check if user has any positions to flatten
+    if (!target || submitting || !selectedTournament) return;
+
+    // Check if user has any positions to flatten in this tournament
     if (!longPosition && !shortPosition) {
-      tradeError = 'No positions to flatten';
+      tradeError = 'No positions to flatten in this tournament';
       return;
     }
 
@@ -180,12 +180,12 @@
     tradeError = '';
 
     try {
-      // Use the dedicated flatten endpoint
-      const result = await apiFetch(`/trade/flatten/${targetId}`, {
+      // Use the dedicated flatten endpoint with tournament ID
+      const result = await apiFetch(`/trade/flatten/${targetId}?tournament_id=${selectedTournament.id}`, {
         method: 'POST'
       });
 
-      alert(`✅ All positions flattened! Total P&L: ${result.total_pnl >= 0 ? '+' : ''}$${result.total_pnl.toFixed(2)}`);
+      alert(`✅ All positions flattened in ${selectedTournament.name}! Total P&L: ${result.total_pnl >= 0 ? '+' : ''}$${result.total_pnl.toFixed(2)}`);
       await loadAllData();
 
     } catch (err) {
@@ -512,13 +512,13 @@
             </div>
 
             <!-- Flatten All Button -->
-            {#if (longPosition && longPosition.attention_stakes > 0) || (shortPosition && shortPosition.attention_stakes > 0)}
+            {#if selectedTournament && ((longPosition && longPosition.attention_stakes > 0) || (shortPosition && shortPosition.attention_stakes > 0))}
               <button
                 class="btn btn-warning w-full mb-4"
-                on:click={() => {flattenAllPositions}}
+                on:click={flattenAllPositions}
                 disabled={submitting}
               >
-                🔄 Flatten All Positions
+                🔄 Flatten All Positions in {selectedTournament.name}
               </button>
             {/if}
 
