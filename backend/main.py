@@ -32,6 +32,7 @@ from google_trends_service import GoogleTrendsService
 from models import (
     AttentionHistory,
     AttentionTarget,
+    ChatMessage,
     Portfolio,
     TargetType,
     Tournament,
@@ -123,6 +124,10 @@ class TournamentEntryRequest(BaseModel):
     """Tournament entry request model."""
     tournament_id: int
 
+class ChatMessageRequest(BaseModel):
+    """Chat message request model."""
+    content: str
+
 # WebSocket Connection Manager
 class ConnectionManager:
     """
@@ -133,6 +138,7 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
         self.target_subscribers: Dict[int, List[WebSocket]] = {}
+        self.chat_connections: List[WebSocket] = []
 
     async def connect(self, websocket: WebSocket, target_id: int = None):
         """Accept WebSocket connection and optionally subscribe to target updates."""
@@ -167,6 +173,30 @@ class ConnectionManager:
             # Clean up disconnected clients
             for conn in disconnected:
                 self.target_subscribers[target_id].remove(conn)
+
+    async def connect_chat(self, websocket: WebSocket):
+        """Accept WebSocket connection for chat."""
+        await websocket.accept()
+        self.chat_connections.append(websocket)
+
+    def disconnect_chat(self, websocket: WebSocket):
+        """Remove WebSocket connection from chat connections."""
+        if websocket in self.chat_connections:
+            self.chat_connections.remove(websocket)
+
+    async def broadcast_to_chat(self, data: dict):
+        """Send updates to all chat WebSocket clients."""
+        disconnected = []
+        for connection in self.chat_connections:
+            try:
+                await connection.send_text(json.dumps(data))
+            except (ConnectionError, RuntimeError) as e:
+                logger.warning(f"Failed to send chat message to client: {e}")
+                disconnected.append(connection)
+
+        # Clean up disconnected clients
+        for conn in disconnected:
+            self.chat_connections.remove(conn)
 
 manager = ConnectionManager()
 
@@ -1928,3 +1958,73 @@ async def shutdown_event():
             pass
     
     logger.info("Successfully TrendBet API shutdown complete!")
+
+# Chat endpoints
+@app.get("/chat/messages")
+async def get_chat_messages(
+    limit: int = Query(50, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get recent chat messages for the global chat."""
+    messages = db.query(ChatMessage).order_by(ChatMessage.timestamp.desc()).limit(limit).all()
+    messages.reverse()  # Reverse to show oldest first
+
+    return {
+        "messages": [
+            {
+                "id": msg.id,
+                "username": msg.user.username,
+                "content": msg.content,
+                "timestamp": msg.timestamp.isoformat(),
+                "user_id": msg.user_id
+            }
+            for msg in messages
+        ]
+    }
+
+@app.post("/chat/send")
+async def send_chat_message(
+    message: ChatMessageRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Send a message to the global chat."""
+    # Create new chat message
+    new_message = ChatMessage(
+        user_id=current_user.id,
+        content=message.content.strip()
+    )
+
+    db.add(new_message)
+    db.commit()
+    db.refresh(new_message)
+
+    # Broadcast message to all connected chat WebSocket clients
+    message_data = {
+        "type": "chat_message",
+        "message": {
+            "id": new_message.id,
+            "username": current_user.username,
+            "content": new_message.content,
+            "timestamp": new_message.timestamp.isoformat(),
+            "user_id": current_user.id
+        }
+    }
+
+    await manager.broadcast_to_chat(message_data)
+
+    return {"status": "success", "message": "Message sent"}
+
+# WebSocket endpoint for chat
+@app.websocket("/ws/chat")
+async def websocket_chat_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time chat functionality."""
+    await manager.connect_chat(websocket)
+
+    try:
+        while True:
+            # Keep connection alive, actual messaging is handled via REST API
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect_chat(websocket)

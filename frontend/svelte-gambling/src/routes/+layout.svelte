@@ -5,6 +5,7 @@
   import { goto } from '$app/navigation';
   import { user } from '$lib/stores';
   import apiFetch from '$lib/api';
+  import GlobalChat from '$lib/components/GlobalChat.svelte';
 
   let authChecked = false;
   let isCheckingAuth = true;
@@ -254,8 +255,11 @@
     {/if}
 
     <!-- Main Content -->
-    <main class="{showNavigation ? 'pt-0' : 'pt-16'} min-h-screen">
+    <main class="{showNavigation ? 'pt-0' : 'pt-16'} min-h-screen {$user ? 'pr-[20%]' : ''}">
       <slot />
     </main>
+
+    <!-- Global Chat Component -->
+    <GlobalChat />
   </div>
 {/if}

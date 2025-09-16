@@ -185,3 +185,14 @@ class Trade(Base):
     user = relationship("User", back_populates="trades")
     target = relationship("AttentionTarget", back_populates="trades")
     tournament = relationship("Tournament")  # NEW
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    content = Column(Text, nullable=False)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    # Relationships
+    user = relationship("User")
