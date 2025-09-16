@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey, Enum, Text, Numeric
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 import enum
 
 Base = declarative_base()
@@ -26,8 +26,8 @@ class User(Base):
     username = Column(String(50), unique=True, index=True)
     email = Column(String(100), unique=True, index=True)
     password_hash = Column(String(128))
-    balance = Column(Numeric(10, 2), default=1000.00)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    balance = Column(Numeric(10, 2), default=0.00)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     is_active = Column(Boolean, default=True)
     
     # Relationships
@@ -48,8 +48,8 @@ class AttentionTarget(Base):
     current_attention_score = Column(Numeric(5, 2), nullable=False, default=50.0)
     
     # Metadata
-    last_updated = Column(DateTime, default=datetime.utcnow)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    last_updated = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     is_active = Column(Boolean, default=True)
     
     # 5-year baseline metadata
@@ -77,7 +77,7 @@ class AttentionHistory(Base):
     timeframe_used = Column(String(20), default="5_year")
     confidence_score = Column(Numeric(3, 2))
     
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     
     # Relationship
     target = relationship("AttentionTarget", back_populates="history")
@@ -100,8 +100,8 @@ class Portfolio(Base):
     attention_stakes = Column(Numeric(10, 2), nullable=False, default=0.0)
     average_entry_score = Column(Numeric(5, 2))  # Average attention score when invested
     
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_updated = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_updated = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships
     user = relationship("User", back_populates="portfolios")
@@ -126,7 +126,7 @@ class Tournament(Base):
     is_active = Column(Boolean, default=True)
     is_finished = Column(Boolean, default=False)
     
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships
     entries = relationship("TournamentEntry", back_populates="tournament")
@@ -149,7 +149,7 @@ class TournamentEntry(Base):
     
     payout_amount = Column(Numeric(10, 2), default=0.0)
     
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     finished_at = Column(DateTime)
     
     # Relationships
@@ -178,7 +178,7 @@ class Trade(Base):
     pnl = Column(Numeric(10, 2), default=0.0)
     is_closed = Column(Boolean, default=False)
     
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     closed_at = Column(DateTime)
     
     # Relationships

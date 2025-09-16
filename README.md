@@ -105,7 +105,7 @@ Google Trends → Attention Scores → Position Values → P&L Calculation
 - [x] **Portfolio Dashboard**: Track all positions across tournaments
 - [x] **Daily P&L Display**: Top navigation shows daily gains/losses
 
-### **✅ Tournament System**  
+### **✅ Tournament System**
 - [x] **Multiple Tournaments**: Daily, weekly, monthly competitions
 - [x] **Free Tournaments**: $0 entry for practice and testing
 - [x] **Paid Tournaments**: Real entry fees with cash prizes
@@ -127,19 +127,19 @@ Google Trends → Attention Scores → Position Values → P&L Calculation
 ```sql
 -- Attention targets (politicians, celebrities, etc.)
 attention_targets (
-  id, name, type, search_term, current_attention_score, 
+  id, name, type, search_term, current_attention_score,
   description, last_updated, is_active
 )
 
 -- User tournament entries with virtual balances
 tournament_entries (
-  user_id, tournament_id, entry_fee, starting_balance, 
+  user_id, tournament_id, entry_fee, starting_balance,
   current_balance, final_pnl, rank, payout_amount
 )
 
 -- Long/Short positions within tournaments
 portfolios (
-  user_id, target_id, tournament_id, position_type, 
+  user_id, target_id, tournament_id, position_type,
   attention_stakes, average_entry_score
 )
 
@@ -180,6 +180,9 @@ pip install -r requirements.txt
 echo "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/trendbet" > .env
 echo "SECRET_KEY=your-secret-key-here" >> .env
 
+# Initialize database
+python database.py reset  # or python reset_db.py for simple reset
+
 # Run server
 uvicorn main:app --reload --port 8000
 ```
@@ -195,10 +198,18 @@ npm install
 npm run dev  # Starts on http://localhost:5173
 ```
 
+### **Testing the System**
+```bash
+# Test database and Google Trends API
+python test.py          # Test everything
+python test.py db       # Test database only
+python test.py trends   # Test Google Trends API only
+```
+
 ### **First Test**
 1. Go to http://localhost:5173
 2. Register an account
-3. Browse targets and click "Trade" 
+3. Browse targets and click "Trade"
 4. Select free tournament
 5. Open long/short positions
 6. Watch real-time P&L updates!

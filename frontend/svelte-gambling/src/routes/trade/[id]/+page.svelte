@@ -24,6 +24,11 @@
   let chartTargetId = null;
   let chartTargetName = '';
 
+  // Tournament popup state
+  let showTournamentPopup = false;
+  let availablePaidTournaments = [];
+  let selectedPaidTournament = null;
+
   $: targetId = $page.params.id;
   $: stakeCost = target ? tradeAmount * (target.current_attention_score || target.attention_score || 50) / 10 : 0;
   $: tournamentBalance = selectedTournament ? (selectedTournament.current_balance || 10000) : 0;
@@ -52,21 +57,50 @@
       ]);
 
       target = targetData;
-      tournaments = Array.isArray(tournamentsData) ? tournamentsData : [];
-      
+
+      // Filter tournaments by target type
+      const allTournaments = Array.isArray(tournamentsData) ? tournamentsData : [];
+      tournaments = allTournaments.filter(tournament => {
+        return tournament.target_type === target.type;
+      });
+
+      console.log(`🎯 Target: ${target.name} (${target.type})`);
+      console.log(`🏆 Available tournaments: ${tournaments.length}/${allTournaments.length}`);
+      console.log(`🆓 Free tournaments:`, tournaments.filter(t => t.entry_fee === 0 || t.entry_fee === '0.00'));
+
       // Find positions for this target
       if (portfolioData.positions) {
-        longPosition = portfolioData.positions.find(p => 
+        longPosition = portfolioData.positions.find(p =>
           p.target_id === parseInt(targetId) && (p.position_type === 'long' || !p.position_type)
         );
-        shortPosition = portfolioData.positions.find(p => 
+        shortPosition = portfolioData.positions.find(p =>
           p.target_id === parseInt(targetId) && p.position_type === 'short'
         );
       }
 
-      // Auto-select first tournament if available
-      if (tournaments.length > 0 && !selectedTournament) {
-        selectedTournament = tournaments[0];
+      // Auto-join free tournaments and select first available
+      if (tournaments.length > 0) {
+        // Check if user is already in any tournaments
+        const joinedTournaments = tournaments.filter(t => t.user_entry);
+
+        if (joinedTournaments.length > 0) {
+          // Use first joined tournament
+          selectedTournament = joinedTournaments[0];
+          console.log(`✅ Using joined tournament: ${selectedTournament.name}`);
+        } else {
+          // Look for free tournaments to auto-join
+          const freeTournaments = tournaments.filter(t => t.entry_fee === 0 || t.entry_fee === '0.00');
+
+          if (freeTournaments.length > 0) {
+            // Auto-join first free tournament
+            await autoJoinFreeTournament(freeTournaments[0]);
+          } else {
+            // Show paid tournament popup
+            showPaidTournamentPopup(tournaments);
+          }
+        }
+      } else {
+        console.error(`❌ No tournaments available for ${target.type} targets!`);
       }
 
       // Setup chart exactly like browse page
@@ -113,7 +147,7 @@
     submitting = true;
 
     try {
-      const result = await apiFetch('/trade', {
+      await apiFetch('/trade', {
         method: 'POST',
         body: JSON.stringify({
           target_id: parseInt(targetId),
@@ -130,6 +164,11 @@
       // Reset and reload
       tradeAmount = 0;
       await loadAllData();
+
+      // Refresh navbar P&L
+      if (typeof window !== 'undefined' && window.refreshNavbarPnL) {
+        window.refreshNavbarPnL();
+      }
 
     } catch (err) {
       tradeError = err.message || 'Trade failed';
@@ -158,6 +197,11 @@
       alert(`✅ ${positionType.toUpperCase()} position closed! ${pnlText ? `P&L: ${pnlText}` : ''}`);
 
       await loadAllData();
+
+      // Refresh navbar P&L
+      if (typeof window !== 'undefined' && window.refreshNavbarPnL) {
+        window.refreshNavbarPnL();
+      }
 
     } catch (err) {
       tradeError = err.message || 'Failed to close position';
@@ -188,9 +232,69 @@
       alert(`✅ All positions flattened in ${selectedTournament.name}! Total P&L: ${result.total_pnl >= 0 ? '+' : ''}$${result.total_pnl.toFixed(2)}`);
       await loadAllData();
 
+      // Refresh navbar P&L
+      if (typeof window !== 'undefined' && window.refreshNavbarPnL) {
+        window.refreshNavbarPnL();
+      }
+
     } catch (err) {
       tradeError = err.message || 'Failed to flatten positions';
       console.error('Flatten positions error:', err);
+    } finally {
+      submitting = false;
+    }
+  }
+
+  // Auto-join free tournament
+  async function autoJoinFreeTournament(tournament) {
+    try {
+      console.log(`🎯 Auto-joining free tournament: ${tournament.name}`);
+
+      await apiFetch('/tournaments/join', {
+        method: 'POST',
+        body: JSON.stringify({
+          tournament_id: tournament.id
+        })
+      });
+
+      console.log(`✅ Auto-joined: ${tournament.name}`);
+
+      // Reload data to get updated tournament info
+      await loadAllData();
+
+    } catch (err) {
+      console.error('Auto-join failed:', err);
+      tradeError = `Failed to auto-join ${tournament.name}: ${err.message}`;
+    }
+  }
+
+  // Show popup for paid tournaments
+  function showPaidTournamentPopup(paidTournaments) {
+    availablePaidTournaments = paidTournaments;
+    showTournamentPopup = true;
+  }
+
+  // Join selected paid tournament (currently unused but kept for future implementation)
+  async function joinPaidTournament(tournament) {
+    try {
+      submitting = true;
+
+      await apiFetch('/tournaments/join', {
+        method: 'POST',
+        body: JSON.stringify({
+          tournament_id: tournament.id
+        })
+      });
+
+      alert(`✅ Joined ${tournament.name}! Entry fee: $${tournament.entry_fee}`);
+
+      // Close popup and reload data
+      showTournamentPopup = false;
+      await loadAllData();
+
+    } catch (err) {
+      alert(`Failed to join tournament: ${err.message}`);
+      console.error('Tournament join error:', err);
     } finally {
       submitting = false;
     }
@@ -269,12 +373,12 @@
         </div>
       </div>
 
-      <!-- Main Chart Section (exactly like browse page) -->
+      <!-- Main Chart Section -->
       <div class="card mb-8">
         <div class="flex items-center justify-between mb-6">
           <div>
-            <h2 class="text-xl font-semibold">{target.name}</h2>
-            <p class="text-gray-400">Current Attention Score: {formatNumber(target.current_attention_score || target.attention_score || 50)}</p>
+            <h2 class="text-xl font-semibold">Attention Chart</h2>
+            <p class="text-gray-400">Current Score: {formatNumber(target.current_attention_score || target.attention_score || 50)}</p>
             {#if target.description}
               <p class="text-sm text-gray-500 mt-1">{target.description}</p>
             {/if}
@@ -428,7 +532,7 @@
           {:else}
             <div class="text-center py-8 text-gray-400">
               <div class="text-3xl mb-2">📊</div>
-              <p class="text-sm">No positions in {target.name}</p>
+              <p class="text-sm">No current positions</p>
               <p class="text-xs mt-1">Open a position below</p>
             </div>
           {/if}
@@ -445,10 +549,11 @@
           {:else}
             <!-- Trade Amount Input -->
             <div class="mb-4">
-              <label class="block text-sm font-medium text-gray-300 mb-2">
+              <label for="trade-amount" class="block text-sm font-medium text-gray-300 mb-2">
                 Amount to Stake
               </label>
               <input
+                id="trade-amount"
                 type="number"
                 min="0.01"
                 step="0.01"
@@ -573,6 +678,64 @@
     {/if}
   </div>
 </div>
+
+<!-- Paid Tournament Registration Popup -->
+{#if showTournamentPopup && selectedPaidTournament}
+  <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-gray-800 rounded-xl p-6 max-w-md w-full mx-4 border border-gray-700">
+      <div class="text-center mb-6">
+        <div class="text-4xl mb-3">🏆</div>
+        <h3 class="text-xl font-bold mb-2">{selectedPaidTournament.name}</h3>
+        <p class="text-gray-400 text-sm">Registration Required</p>
+      </div>
+
+      <div class="space-y-4 mb-6">
+        <div class="flex justify-between items-center p-3 bg-gray-700/50 rounded-lg">
+          <span class="text-sm text-gray-300">Entry Fee:</span>
+          <span class="font-medium text-yellow-400">${selectedPaidTournament.entry_fee}</span>
+        </div>
+
+        <div class="flex justify-between items-center p-3 bg-gray-700/50 rounded-lg">
+          <span class="text-sm text-gray-300">Prize Pool:</span>
+          <span class="font-medium text-emerald-400">${selectedPaidTournament.prize_pool}</span>
+        </div>
+
+        <div class="flex justify-between items-center p-3 bg-gray-700/50 rounded-lg">
+          <span class="text-sm text-gray-300">Duration:</span>
+          <span class="font-medium capitalize">{selectedPaidTournament.duration}</span>
+        </div>
+
+        <div class="flex justify-between items-center p-3 bg-gray-700/50 rounded-lg">
+          <span class="text-sm text-gray-300">Target Type:</span>
+          <span class="font-medium capitalize">{selectedPaidTournament.target_type}</span>
+        </div>
+      </div>
+
+      <div class="flex gap-3">
+        <button
+          class="btn btn-secondary flex-1"
+          on:click={() => {
+            showTournamentPopup = false;
+            selectedPaidTournament = null;
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          class="btn btn-primary flex-1"
+          on:click={() => {
+            // TODO: Implement tournament registration
+            alert('Tournament registration coming soon!');
+            showTournamentPopup = false;
+            selectedPaidTournament = null;
+          }}
+        >
+          Register Now
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .card {

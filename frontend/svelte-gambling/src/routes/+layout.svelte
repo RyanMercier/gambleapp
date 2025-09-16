@@ -1,6 +1,6 @@
 <script>
   import "../app.css";
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { user } from '$lib/stores';
@@ -19,6 +19,7 @@
     await checkAuthentication();
     if (authChecked && $user) {
       loadUserStats();
+      startAutoRefresh();
     }
   });
 
@@ -72,6 +73,33 @@
       console.error('Failed to load user stats:', error);
     }
   }
+
+  // Auto-refresh P&L data
+  let refreshInterval;
+  function startAutoRefresh() {
+    // Refresh P&L every 30 seconds
+    refreshInterval = setInterval(() => {
+      if ($user && authChecked) {
+        loadUserStats();
+      }
+    }, 30000);
+  }
+
+  // Global function to refresh P&L immediately (for after trades)
+  if (typeof window !== 'undefined') {
+    window.refreshNavbarPnL = () => {
+      if ($user && authChecked) {
+        loadUserStats();
+      }
+    };
+  }
+
+  // Cleanup interval on component destroy
+  onDestroy(() => {
+    if (refreshInterval) {
+      clearInterval(refreshInterval);
+    }
+  });
 
   function isProtectedRoute(path) {
     return protectedRoutes.some(route => path.startsWith(route));

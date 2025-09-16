@@ -1,43 +1,63 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Query, BackgroundTasks
-from fastapi import WebSocket, WebSocketDisconnect
+"""
+TrendBet Attention Trading API
+
+A FastAPI application for attention-based trading using Google Trends data.
+Provides endpoints for user authentication, attention target management,
+tournament creation, trading execution, and real-time data updates.
+"""
+
+# Standard library imports
+import asyncio
+import json
+import logging
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from typing import Dict, List, Optional
+
+# Third-party imports
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from datetime import datetime, timedelta
-from decimal import Decimal
-from typing import List, Optional, Dict
-import asyncio
-import logging
-import json
-from google_trends_service import GoogleTrendsService
-from seed_data import store_timeframe_data_with_real_timestamps
+
+# Local imports
+from auth import authenticate_user, create_access_token, create_user, decode_access_token, get_current_user
 from csv_loader import csv_loader
-
 from database import SessionLocal, engine
+from google_trends_service import GoogleTrendsService
 from models import (
-    User, AttentionTarget, Portfolio, Trade, Tournament, 
-    TournamentEntry, AttentionHistory, TargetType, TournamentDuration
+    AttentionHistory,
+    AttentionTarget,
+    Portfolio,
+    TargetType,
+    Tournament,
+    TournamentDuration,
+    TournamentEntry,
+    Trade,
+    User,
 )
-from auth import (
-    create_user, authenticate_user, create_access_token, 
-    decode_access_token, get_current_user
-)
+from seed_data import store_timeframe_data_with_real_timestamps
 
-import sys
-import os
-
+# Configuration
 USE_TOR = "--torify" in sys.argv or os.getenv('USE_TOR', 'false').lower() == 'true'
 
 
-app = FastAPI(title="TrendBet Attention Trading API", version="2.0.0")
+app = FastAPI(
+    title="TrendBet Attention Trading API",
+    version="2.0.0",
+    description="A real-time attention trading platform using Google Trends data"
+)
 
+# CORS middleware configuration for development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "http://localhost:5173", 
+        "http://localhost:5173",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
         "*"  # For development only - remove in production
@@ -48,102 +68,145 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
+# OAuth2 configuration
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# Logging configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Database dependency
 def get_db():
+    """
+    Dependency function that provides database session.
+    Ensures proper cleanup of database connections.
+    """
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-# Pydantic models
+
+# Pydantic request/response models
 class UserRegister(BaseModel):
+    """User registration request model."""
     username: str
     email: str
     password: str
 
+
 class UserLogin(BaseModel):
+    """User login request model."""
     username: str
     password: str
 
+
 class TradeRequest(BaseModel):
+    """Trade execution request model."""
     target_id: int
-    trade_type: str  # 'buy' or 'sell'
+    trade_type: str  # 'buy' for long positions, 'sell' for short positions
     shares: float
+    tournament_id: int
+
 
 class SearchRequest(BaseModel):
+    """Search request for finding attention targets."""
     query: str
-    target_type: str = "politician"
+    target_type: str = "politician"  # Default to politician search
+
 
 class TournamentEntryRequest(BaseModel):
+    """Tournament entry request model."""
     tournament_id: int
 
 # WebSocket Connection Manager
 class ConnectionManager:
+    """
+    Manages WebSocket connections for real-time data updates.
+    Handles both global connections and target-specific subscriptions.
+    """
+
     def __init__(self):
         self.active_connections: List[WebSocket] = []
         self.target_subscribers: Dict[int, List[WebSocket]] = {}
-    
+
     async def connect(self, websocket: WebSocket, target_id: int = None):
+        """Accept WebSocket connection and optionally subscribe to target updates."""
         await websocket.accept()
         self.active_connections.append(websocket)
-        
+
         if target_id:
             if target_id not in self.target_subscribers:
                 self.target_subscribers[target_id] = []
             self.target_subscribers[target_id].append(websocket)
-    
+
     def disconnect(self, websocket: WebSocket, target_id: int = None):
+        """Remove WebSocket connection from active connections and subscriptions."""
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
-        
+
         if target_id and target_id in self.target_subscribers:
             if websocket in self.target_subscribers[target_id]:
                 self.target_subscribers[target_id].remove(websocket)
-    
+
     async def send_target_update(self, target_id: int, data: dict):
-        """Send updates to all clients subscribed to a specific target"""
+        """Send updates to all clients subscribed to a specific target."""
         if target_id in self.target_subscribers:
             disconnected = []
             for connection in self.target_subscribers[target_id]:
                 try:
                     await connection.send_text(json.dumps(data))
-                except:
+                except (ConnectionError, RuntimeError) as e:
+                    logger.warning(f"Failed to send update to client: {e}")
                     disconnected.append(connection)
-            
+
             # Clean up disconnected clients
             for conn in disconnected:
                 self.target_subscribers[target_id].remove(conn)
 
 manager = ConnectionManager()
 
-# Add this OPTIONS handler for preflight requests
+
+# CORS preflight handler
 @app.options("/{full_path:path}")
 async def options_handler():
+    """Handle CORS preflight requests."""
     return {"message": "OK"}
 
-# Auth endpoints
+
+# Authentication endpoints
 @app.post("/auth/register")
 def register(user_data: UserRegister, db: Session = Depends(get_db)):
+    """
+    Register a new user account.
+
+    Args:
+        user_data: User registration information
+        db: Database session
+
+    Returns:
+        Authentication token and user information
+
+    Raises:
+        HTTPException: If username or email already exists
+    """
     existing_user = db.query(User).filter(
         (User.username == user_data.username) | (User.email == user_data.email)
     ).first()
-    
+
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username or email already exists"
         )
-    
+
     user = create_user(db, user_data.username, user_data.email, user_data.password)
     token = create_access_token(data={"sub": user.username})
-    
+
     return {
         "token": token,
         "user": {
@@ -156,13 +219,26 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
 
 @app.post("/auth/login")
 def login(user_data: UserLogin, db: Session = Depends(get_db)):
+    """
+    Authenticate user and return access token.
+
+    Args:
+        user_data: User login credentials
+        db: Database session
+
+    Returns:
+        Authentication token and user information
+
+    Raises:
+        HTTPException: If credentials are invalid
+    """
     user = authenticate_user(db, user_data.username, user_data.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password"
         )
-    
+
     token = create_access_token(data={"sub": user.username})
     return {
         "token": token,
@@ -174,8 +250,18 @@ def login(user_data: UserLogin, db: Session = Depends(get_db)):
         }
     }
 
+
 @app.get("/auth/me")
 def get_me(current_user: User = Depends(get_current_user)):
+    """
+    Get current user information.
+
+    Args:
+        current_user: Authenticated user from token
+
+    Returns:
+        Current user profile information
+    """
     return {
         "id": current_user.id,
         "username": current_user.username,
@@ -434,9 +520,9 @@ async def search_attention_target(
                     await store_timeframe_data_with_real_timestamps(
                         new_target, trends_data, "1d", "now 1-d", db
                     )
-                    logger.info("✅ Stored initial 1-day data immediately")
+                    logger.info("Successfully stored initial 1-day data immediately")
                 except Exception as e:
-                    logger.warning(f"⚠️ Failed to store initial 1d data: {e}")
+                    logger.warning(f"Failed to store initial 1d data: {e}")
             else:
                 # Store single point if no timeline data
                 history = AttentionHistory(
@@ -481,17 +567,17 @@ async def gradual_historical_seeding(target_id: int, search_term: str, start_del
     """Gradual background seeding to avoid rate limits - spread over 30+ minutes"""
     
     # Initial delay before starting
-    logger.info(f"📊 Gradual seeding for target {target_id} starting in {start_delay_minutes} minutes...")
+    logger.info(f"Chart: Gradual seeding for target {target_id} starting in {start_delay_minutes} minutes...")
     await asyncio.sleep(start_delay_minutes * 60)
     
     db = SessionLocal()
     try:
         target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
         if not target:
-            logger.error(f"❌ Target {target_id} not found for gradual seeding")
+            logger.error(f"Failed: Target {target_id} not found for gradual seeding")
             return
             
-        logger.info(f"📊 Starting gradual historical seeding for {target.name}")
+        logger.info(f"Chart: Starting gradual historical seeding for {target.name}")
         
         # FIX: Conservative timeframe seeding with long delays (no random)
         timeframes_with_delays = [
@@ -508,10 +594,10 @@ async def gradual_historical_seeding(target_id: int, search_term: str, start_del
             for timeframe_code, timeframe_name, delay_minutes in timeframes_with_delays:
                 try:
                     # Wait before each request
-                    logger.info(f"⏱️ Waiting {delay_minutes} minutes before seeding {timeframe_name} data for {target.name}")
+                    logger.info(f"Timing: Waiting {delay_minutes} minutes before seeding {timeframe_name} data for {target.name}")
                     await asyncio.sleep(delay_minutes * 60)
                     
-                    logger.info(f"📅 Seeding {timeframe_name} data for {target.name}...")
+                    logger.info(f"Data: Seeding {timeframe_name} data for {target.name}...")
                     data = await service.get_google_trends_data(
                         search_term, 
                         timeframe=timeframe_code,
@@ -523,33 +609,33 @@ async def gradual_historical_seeding(target_id: int, search_term: str, start_del
                             target, data, timeframe_name, timeframe_code, db
                         )
                         seeded_count += 1
-                        logger.info(f"✅ Seeded {timeframe_name} data for {target.name}")
+                        logger.info(f"Successfully Seeded {timeframe_name} data for {target.name}")
                     else:
                         error_msg = data.get('error', 'No timeline data') if data else 'Request failed'
-                        logger.warning(f"⚠️ No {timeframe_name} data for {target.name}: {error_msg}")
+                        logger.warning(f"Warning: No {timeframe_name} data for {target.name}: {error_msg}")
                         
                         # If we hit rate limits, increase delays for remaining timeframes
                         if 'Rate limited' in error_msg or 'Circuit breaker' in error_msg:
-                            logger.warning(f"🚫 Rate limited during {timeframe_name} seeding. Extending delays for remaining timeframes.")
+                            logger.warning(f"Blocked: Rate limited during {timeframe_name} seeding. Extending delays for remaining timeframes.")
                             # Double remaining delays
                             remaining_frames = timeframes_with_delays[timeframes_with_delays.index((timeframe_code, timeframe_name, delay_minutes)) + 1:]
-                            for i, (tc, tn, dm) in enumerate(remaining_frames):
+                            for tc, tn, dm in remaining_frames:
                                 timeframes_with_delays[timeframes_with_delays.index((tc, tn, dm))] = (tc, tn, dm * 2)
                     
                 except Exception as e:
-                    logger.error(f"❌ Failed to seed {timeframe_name} data for {target.name}: {e}")
+                    logger.error(f"Failed: Failed to seed {timeframe_name} data for {target.name}: {e}")
                     # Continue with next timeframe after brief pause
                     await asyncio.sleep(30)
             
             total_time = sum([delay for _, _, delay in timeframes_with_delays])
-            logger.info(f"✅ Gradual seeding complete for {target.name}: {seeded_count}/6 timeframes over {total_time} minutes")
+            logger.info(f"Successfully Gradual seeding complete for {target.name}: {seeded_count}/6 timeframes over {total_time} minutes")
             
             # Update target to indicate seeding is complete
-            target.last_updated = datetime.utcnow()
+            target.last_updated = datetime.now(timezone.utc)
             db.commit()
             
     except Exception as e:
-        logger.error(f"❌ Gradual seeding failed for target {target_id}: {e}")
+        logger.error(f"Failed: Gradual seeding failed for target {target_id}: {e}")
         db.rollback()
     finally:
         db.close()
@@ -560,10 +646,10 @@ async def seed_historical_data_for_target(target_id: int, search_term: str):
     try:
         target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
         if not target:
-            logger.error(f"❌ Target {target_id} not found for historical seeding")
+            logger.error(f"Failed: Target {target_id} not found for historical seeding")
             return
             
-        logger.info(f"📊 Starting historical data seeding for {target.name}")
+        logger.info(f"Chart: Starting historical data seeding for {target.name}")
         
         async with GoogleTrendsService(websocket_manager=manager, use_tor=USE_TOR) as service:
             # Standard Google Trends timeframes
@@ -580,7 +666,7 @@ async def seed_historical_data_for_target(target_id: int, search_term: str):
             
             for timeframe_code, timeframe_name in timeframes:
                 try:
-                    logger.info(f"📅 Seeding {timeframe_name} data for {target.name}...")
+                    logger.info(f"Data: Seeding {timeframe_name} data for {target.name}...")
                     data = await service.get_google_trends_data(search_term, timeframe=timeframe_code)
                     
                     if data and data.get('success') and data.get('timeline'):
@@ -588,24 +674,24 @@ async def seed_historical_data_for_target(target_id: int, search_term: str):
                             target, data, timeframe_name, timeframe_code, db
                         )
                         seeded_count += 1
-                        logger.info(f"✅ Seeded {timeframe_name} data")
+                        logger.info(f"Successfully Seeded {timeframe_name} data")
                     else:
-                        logger.warning(f"⚠️ No {timeframe_name} data available for {target.name}")
+                        logger.warning(f"Warning: No {timeframe_name} data available for {target.name}")
                     
                     # Rate limit between requests
                     await asyncio.sleep(2)
                     
                 except Exception as e:
-                    logger.error(f"❌ Failed to seed {timeframe_name} data for {target.name}: {e}")
+                    logger.error(f"Failed: Failed to seed {timeframe_name} data for {target.name}: {e}")
             
-            logger.info(f"✅ Historical seeding complete for {target.name}: {seeded_count}/6 timeframes")
+            logger.info(f"Successfully Historical seeding complete for {target.name}: {seeded_count}/6 timeframes")
             
             # Update target to indicate seeding is complete
-            target.last_updated = datetime.utcnow()
+            target.last_updated = datetime.now(timezone.utc)
             db.commit()
             
     except Exception as e:
-        logger.error(f"❌ Historical seeding failed for target {target_id}: {e}")
+        logger.error(f"Failed: Historical seeding failed for target {target_id}: {e}")
         db.rollback()
     finally:
         db.close()
@@ -667,7 +753,7 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
     
-    end_time = datetime.utcnow()
+    end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(days=days)
     
     # Simple timeframe mapping to data sources
@@ -684,7 +770,7 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
     else:
         data_source = "google_trends_5y"
     
-    logger.info(f"📊 Chart request: {days} days -> trying {data_source}")
+    logger.info(f"Chart: Chart request: {days} days -> trying {data_source}")
     
     # Try primary data source first
     base_data = db.query(AttentionHistory).filter(
@@ -698,7 +784,7 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
     
     # For 1-day charts, always try to add real-time data
     if days <= 1:
-        logger.info("📊 Adding real-time data for 1-day chart")
+        logger.info("Chart: Adding real-time data for 1-day chart")
         realtime_data = db.query(AttentionHistory).filter(
             AttentionHistory.target_id == target_id,
             AttentionHistory.data_source == "google_trends_realtime",
@@ -709,7 +795,7 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
             # Combine and sort
             all_data = list(all_data) + list(realtime_data)
             all_data.sort(key=lambda x: x.timestamp)
-            logger.info(f"📊 Combined data: {len(base_data)} base + {len(realtime_data)} realtime = {len(all_data)} total")
+            logger.info(f"Chart: Combined data: {len(base_data)} base + {len(realtime_data)} realtime = {len(all_data)} total")
     
     # FIX: If still no data, create a synthetic data point from current score
     if not all_data:
@@ -717,7 +803,7 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
         
         # Create a single data point with current score
         synthetic_data_point = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "attention_score": float(target.current_attention_score),
             "data_source": "current_score_synthetic"
         }
@@ -777,7 +863,7 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
         "google_trends_5y": "monthly data"
     }
     
-    logger.info(f"📊 Returning {len(data_points)} points for {target.name} ({days}d) using {actual_data_source}")
+    logger.info(f"Chart: Returning {len(data_points)} points for {target.name} ({days}d) using {actual_data_source}")
     
     return {
         "target": {
@@ -804,11 +890,46 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
 # Trading endpoints
 @app.post("/trade")
 def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Execute an attention trade - FIXED for consistent decimal handling"""
+    """
+    Execute a trade (buy/sell) for an attention target in a tournament.
+    Validates tournament membership, target type compatibility, and balance requirements.
+
+    Args:
+        trade: Trade request containing target_id, trade_type, shares, and tournament_id
+        current_user: Authenticated user executing the trade
+        db: Database session
+
+    Returns:
+        Trade confirmation with updated balance and position information
+
+    Raises:
+        HTTPException: If target not found, tournament not found, insufficient balance,
+                      or target type doesn't match tournament
+    """
     try:
         target = db.query(AttentionTarget).filter(AttentionTarget.id == trade.target_id).first()
         if not target:
             raise HTTPException(status_code=404, detail="Target not found")
+
+        # Validate tournament exists and user is in it
+        tournament = db.query(Tournament).filter(Tournament.id == trade.tournament_id).first()
+        if not tournament:
+            raise HTTPException(status_code=404, detail="Tournament not found")
+
+        # Check if user is in this tournament
+        tournament_entry = db.query(TournamentEntry).filter(
+            TournamentEntry.tournament_id == trade.tournament_id,
+            TournamentEntry.user_id == current_user.id
+        ).first()
+        if not tournament_entry:
+            raise HTTPException(status_code=400, detail="You must join this tournament before trading")
+
+        # CRITICAL: Validate target type matches tournament type
+        if target.type != tournament.target_type:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Target type mismatch: {target.name} is a {target.type.value} target, but this is a {tournament.target_type.value} tournament"
+            )
         
         # Convert to Decimal for precise calculations
         from decimal import Decimal
@@ -816,18 +937,21 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
         current_score = Decimal(str(target.current_attention_score))
         pnl = Decimal('0.0')
         
-        logger.info(f"💱 Trade: {trade.trade_type} {trade.shares} units of {target.name} (${trade_amount})")
-        
+        logger.info(f"Trade execution: {trade.trade_type} {trade.shares} units of {target.name} (${trade_amount}) for user {current_user.username}")
+
+        # Validate tournament balance for the trade
+
         if trade.trade_type == "buy":  # LONG position
-            if current_user.balance < trade_amount:
-                raise HTTPException(status_code=400, detail=f"Insufficient balance. Need ${trade_amount}, have ${current_user.balance}")
-            
-            current_user.balance -= trade_amount
+            if tournament_entry.current_balance < trade_amount:
+                raise HTTPException(status_code=400, detail=f"Insufficient tournament balance. Need ${trade_amount}, have ${tournament_entry.current_balance}")
+
+            tournament_entry.current_balance -= trade_amount
             
             # Update or create LONG portfolio position
             portfolio = db.query(Portfolio).filter(
                 Portfolio.user_id == current_user.id,
                 Portfolio.target_id == target.id,
+                Portfolio.tournament_id == trade.tournament_id,
                 Portfolio.position_type == "long"
             ).first()
             
@@ -842,6 +966,7 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
                 portfolio = Portfolio(
                     user_id=current_user.id,
                     target_id=target.id,
+                    tournament_id=trade.tournament_id,
                     attention_stakes=trade_amount,
                     average_entry_score=current_score,
                     position_type="long"
@@ -849,15 +974,16 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
                 db.add(portfolio)
         
         elif trade.trade_type == "sell":  # SHORT position
-            if current_user.balance < trade_amount:
-                raise HTTPException(status_code=400, detail=f"Insufficient balance. Need ${trade_amount}, have ${current_user.balance}")
-            
-            current_user.balance -= trade_amount
+            if tournament_entry.current_balance < trade_amount:
+                raise HTTPException(status_code=400, detail=f"Insufficient tournament balance. Need ${trade_amount}, have ${tournament_entry.current_balance}")
+
+            tournament_entry.current_balance -= trade_amount
             
             # Create or update SHORT position
             short_portfolio = db.query(Portfolio).filter(
                 Portfolio.user_id == current_user.id,
                 Portfolio.target_id == target.id,
+                Portfolio.tournament_id == trade.tournament_id,
                 Portfolio.position_type == "short"
             ).first()
             
@@ -872,6 +998,7 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
                 short_portfolio = Portfolio(
                     user_id=current_user.id,
                     target_id=target.id,
+                    tournament_id=trade.tournament_id,
                     attention_stakes=trade_amount,
                     average_entry_score=current_score,
                     position_type="short"
@@ -882,6 +1009,7 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
         new_trade = Trade(
             user_id=current_user.id,
             target_id=target.id,
+            tournament_id=trade.tournament_id,
             trade_type=f"stake_{trade.trade_type}",
             position_type="long" if trade.trade_type == "buy" else "short",
             stake_amount=trade_amount,
@@ -901,28 +1029,51 @@ def execute_trade(trade: TradeRequest, current_user: User = Depends(get_current_
         }
         
     except Exception as e:
-        logger.error(f"❌ Execute trade error: {e}")
+        logger.error(f"Trade execution failed for user {current_user.username}: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Trade execution failed: {str(e)}")
 
 @app.post("/trade/close/{target_id}")
 def close_position(
     target_id: int,
-    position_type: str,  # "long" or "short" 
+    position_type: str,  # "long" or "short"
+    tournament_id: Optional[int] = None,  # Tournament filter
     amount: Optional[float] = None,  # If None, close entire position
-    current_user: User = Depends(get_current_user), 
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Close a specific position (long or short)"""
+    """
+    Close a specific trading position (long or short) for a target.
+
+    Args:
+        target_id: ID of the attention target
+        position_type: Type of position to close ("long" or "short")
+        tournament_id: Optional tournament filter
+        amount: Optional amount to close (if None, closes entire position)
+        current_user: Authenticated user
+        db: Database session
+
+    Returns:
+        Position close confirmation with P&L information
+
+    Raises:
+        HTTPException: If target or position not found, or insufficient position size
+    """
     target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="Target not found")
-    
-    portfolio = db.query(Portfolio).filter(
+
+    # Build query with optional tournament filter
+    query = db.query(Portfolio).filter(
         Portfolio.user_id == current_user.id,
         Portfolio.target_id == target_id,
         Portfolio.position_type == position_type
-    ).first()
+    )
+
+    if tournament_id:
+        query = query.filter(Portfolio.tournament_id == tournament_id)
+
+    portfolio = query.first()
     
     if not portfolio:
         raise HTTPException(status_code=404, detail=f"No {position_type} position found")
@@ -943,8 +1094,15 @@ def close_position(
         # Short profits when score goes down
         pnl = close_amount * (1 - score_ratio)
     
-    # Return money + P&L
-    current_user.balance += close_amount + pnl
+    # Get tournament entry to update balance
+    tournament_entry = db.query(TournamentEntry).filter(
+        TournamentEntry.user_id == current_user.id,
+        TournamentEntry.tournament_id == portfolio.tournament_id
+    ).first()
+
+    if tournament_entry:
+        # Return money + P&L to tournament balance
+        tournament_entry.current_balance += close_amount + pnl
     
     # Reduce or remove position
     portfolio.attention_stakes -= close_amount
@@ -955,10 +1113,12 @@ def close_position(
     close_trade = Trade(
         user_id=current_user.id,
         target_id=target_id,
+        tournament_id=portfolio.tournament_id,
         trade_type=f"close_{position_type}",
         stake_amount=close_amount,
         attention_score_at_entry=target.current_attention_score,
-        pnl=pnl
+        pnl=pnl,
+        is_closed=True
     )
     db.add(close_trade)
     
@@ -1014,17 +1174,26 @@ def flatten_position(
             total_pnl += pnl
             total_closed += close_amount
             
-            # Return money + P&L to user
-            current_user.balance += close_amount + pnl
+            # Get tournament entry to update balance
+            tournament_entry = db.query(TournamentEntry).filter(
+                TournamentEntry.user_id == current_user.id,
+                TournamentEntry.tournament_id == portfolio.tournament_id
+            ).first()
+
+            if tournament_entry:
+                # Return money + P&L to tournament balance
+                tournament_entry.current_balance += close_amount + pnl
             
             # Record the close trade
             close_trade = Trade(
                 user_id=current_user.id,
                 target_id=target_id,
+                tournament_id=portfolio.tournament_id,
                 trade_type=f"flatten_{position_type}",
                 stake_amount=close_amount,
                 attention_score_at_entry=target.current_attention_score,
-                pnl=pnl
+                pnl=pnl,
+                is_closed=True
             )
             db.add(close_trade)
             
@@ -1048,7 +1217,7 @@ def flatten_position(
         }
         
     except Exception as e:
-        logger.error(f"❌ Flatten position error: {e}")
+        logger.error(f"Failed: Flatten position error: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Flatten failed: {str(e)}")
 
@@ -1110,7 +1279,7 @@ def get_portfolio(current_user: User = Depends(get_current_user), db: Session = 
             total_value += current_value
         
         # Calculate today's PnL from trades
-        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow = today + timedelta(days=1)
         
         today_trades = db.query(Trade).filter(
@@ -1130,7 +1299,7 @@ def get_portfolio(current_user: User = Depends(get_current_user), db: Session = 
         }
         
     except Exception as e:
-        logger.error(f"❌ Portfolio error: {e}")
+        logger.error(f"Failed: Portfolio error: {e}")
         raise HTTPException(status_code=500, detail=f"Portfolio error: {str(e)}")
 
 @app.get("/user/tournament-balances")
@@ -1180,14 +1349,14 @@ def get_tournament_balances(current_user: User = Depends(get_current_user), db: 
         }
         
     except Exception as e:
-        logger.error(f"❌ Tournament balances error: {e}")
+        logger.error(f"Failed: Tournament balances error: {e}")
         raise HTTPException(status_code=500, detail=f"Tournament balances error: {str(e)}")
 
 @app.get("/user/daily-pnl")
 def get_daily_pnl(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get user's P&L for today across all tournaments"""
     try:
-        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow = today + timedelta(days=1)
         
         # Get today's trades
@@ -1206,7 +1375,7 @@ def get_daily_pnl(current_user: User = Depends(get_current_user), db: Session = 
         }
         
     except Exception as e:
-        logger.error(f"❌ Daily P&L error: {e}")
+        logger.error(f"Failed: Daily P&L error: {e}")
         return {"daily_pnl": 0.0, "trades_today": 0}
     
 @app.get("/user/stats")
@@ -1283,7 +1452,7 @@ def get_user_stats(current_user: User = Depends(get_current_user), db: Session =
         }
         
     except Exception as e:
-        logger.error(f"❌ User stats error: {e}")
+        logger.error(f"Failed: User stats error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get user stats: {str(e)}")
 
 @app.get("/trades/my")
@@ -1328,7 +1497,7 @@ def get_my_trades(current_user: User = Depends(get_current_user), db: Session = 
         return {"trades": result}
         
     except Exception as e:
-        logger.error(f"❌ Get trades error: {e}")
+        logger.error(f"Failed: Get trades error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get trades: {str(e)}")
 
 # Tournament endpoints
@@ -1348,11 +1517,21 @@ def get_tournaments(db: Session = Depends(get_db)):
                     TournamentEntry.tournament_id == tournament.id
                 ).count()
                 
-                # Calculate status from dates instead of non-existent .status field
-                now = datetime.utcnow()
-                if now < tournament.start_date:
+                # Calculate status from dates with timezone handling
+                now = datetime.now(timezone.utc)
+
+                # Handle timezone-naive dates by assuming UTC
+                start_date = tournament.start_date
+                end_date = tournament.end_date
+
+                if start_date and start_date.tzinfo is None:
+                    start_date = start_date.replace(tzinfo=timezone.utc)
+                if end_date and end_date.tzinfo is None:
+                    end_date = end_date.replace(tzinfo=timezone.utc)
+
+                if start_date and now < start_date:
                     status = "upcoming"
-                elif now > tournament.end_date:
+                elif end_date and now > end_date:
                     status = "finished"
                 else:
                     status = "active"
@@ -1373,14 +1552,14 @@ def get_tournaments(db: Session = Depends(get_db)):
                 })
                 
             except Exception as e:
-                logger.error(f"❌ Error processing tournament {tournament.id}: {e}")
+                logger.error(f"Failed: Error processing tournament {tournament.id}: {e}")
                 continue
         
-        logger.info(f"📋 Returning {len(result)} tournaments")
+        logger.info(f"List: Returning {len(result)} tournaments")
         return result
         
     except Exception as e:
-        logger.error(f"❌ Tournaments endpoint error: {e}")
+        logger.error(f"Failed: Tournaments endpoint error: {e}")
         raise HTTPException(status_code=500, detail=f"Tournament error: {str(e)}")
 
 # Add tournament join endpoint
@@ -1434,7 +1613,7 @@ def join_tournament(
     
     db.commit()
     
-    logger.info(f"🏆 {current_user.username} joined tournament: {tournament.name}")
+    logger.info(f"Tournament: {current_user.username} joined tournament: {tournament.name}")
     
     return {
         "message": f"Successfully joined {tournament.name}",
@@ -1461,7 +1640,7 @@ def get_leaderboard(db: Session = Depends(get_db)):
 
 # Admin endpoints
 @app.get("/admin/cleanup")
-async def cleanup_database(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def cleanup_database(_current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Admin endpoint to cleanup old data"""
     try:
         # Simple cleanup - remove old history entries (keep last 100 per target)
@@ -1484,7 +1663,7 @@ async def cleanup_database(current_user: User = Depends(get_current_user), db: S
         raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
 
 @app.get("/admin/force-update/{target_id}")
-async def force_update_target(target_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def force_update_target(target_id: int, _current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Force update a specific target with fresh Google Trends data"""
     target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
     if not target:
@@ -1500,7 +1679,7 @@ async def force_update_target(target_id: int, current_user: User = Depends(get_c
                 "type": "forced_update",
                 "target_id": target_id,
                 "attention_score": float(target.current_attention_score),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             })
             
             return {
@@ -1522,7 +1701,7 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow()}
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc)}
 
 @app.get("/service-status")
 def get_service_status():
@@ -1531,7 +1710,7 @@ def get_service_status():
         "api": {"status": "healthy", "version": "2.0.0"},
         "database": {"status": "connected"},
         "google_trends": {"status": "running", "service": "GoogleTrendsService"},
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 # WebSocket endpoints
@@ -1544,7 +1723,7 @@ async def websocket_endpoint(websocket: WebSocket):
             await asyncio.sleep(30)
             await websocket.send_text(json.dumps({
                 "type": "ping", 
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }))
     except WebSocketDisconnect:
         manager.disconnect(websocket)
@@ -1559,7 +1738,7 @@ async def websocket_target_endpoint(websocket: WebSocket, target_id: int):
             await websocket.send_text(json.dumps({
                 "type": "ping",
                 "target_id": target_id,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }))
     except WebSocketDisconnect:
         manager.disconnect(websocket, target_id)
@@ -1573,36 +1752,36 @@ async def start_background_tasks():
         
         # Pass the WebSocket manager to enable real-time updates
         asyncio.create_task(start_background_updates(websocket_manager=manager, use_tor=USE_TOR))
-        logger.info("✅ Background data updates started with WebSocket support")
+        logger.info("Successfully Background data updates started with WebSocket support")
         
     except ImportError as e:
-        logger.error(f"❌ Failed to import background_updater: {e}")
+        logger.error(f"Failed: Failed to import background_updater: {e}")
         # Fallback to service method with WebSocket manager
         try:
             from google_trends_service import run_background_updates
             asyncio.create_task(run_background_updates(websocket_manager=manager, use_tor=USE_TOR))
-            logger.info("✅ Fallback background data updates started with WebSocket support")
+            logger.info("Successfully Fallback background data updates started with WebSocket support")
         except ImportError:
-            logger.error("❌ No background update system available")
+            logger.error("Failed: No background update system available")
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application with real-time capabilities"""
-    logger.info("🚀 TrendBet API starting up...")
+    logger.info("Starting: TrendBet API starting up...")
     if USE_TOR:
-        logger.info("🧅 Tor proxy enabled for Google Trends requests")
+        logger.info("Tor proxy enabled for Google Trends requests")
     else:
-        logger.info("🔗 Direct connections enabled for Google Trends requests")
+        logger.info("Direct connections enabled for Google Trends requests")
     
     # Start background tasks for real-time updates
     await start_background_tasks()
     
-    logger.info("✅ TrendBet API ready!")
+    logger.info("Successfully TrendBet API ready!")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on shutdown"""
-    logger.info("🛑 TrendBet API shutting down...")
+    logger.info("Stopping: TrendBet API shutting down...")
     
     # Close all WebSocket connections
     for connection in manager.active_connections:
@@ -1611,4 +1790,4 @@ async def shutdown_event():
         except:
             pass
     
-    logger.info("✅ TrendBet API shutdown complete!")
+    logger.info("Successfully TrendBet API shutdown complete!")

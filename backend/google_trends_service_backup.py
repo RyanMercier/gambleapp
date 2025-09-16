@@ -1,8 +1,11 @@
 """
-Google Trends Service for TrendBet
+Google Trends Service - BULLETPROOF Implementation - FIXED
 
-Provides Google Trends data extraction with robust error handling,
-rate limiting, and session management.
+This is your EXACT working ExactPyTrendsAPI with enhanced cookie handling
+that works with ALL aiohttp versions and environmental conditions.
+
+FIXED: Removed metadata_json field from AttentionHistory creation.
+PRESERVED: All enhanced functionality including bulletproof cookies, browser rotation, Tor support.
 """
 
 import aiohttp
@@ -24,10 +27,10 @@ logger = logging.getLogger(__name__)
 
 class GoogleTrendsService:
     """
-    Google Trends API service with robust session management.
-
-    Handles cookie extraction, rate limiting, and data parsing
-    for reliable Google Trends data retrieval.
+    Bulletproof Google Trends service based on EXACT working implementation
+    
+    This preserves your exact working PyTrends logic but adds bulletproof
+    cookie handling that works with all aiohttp versions.
     """
     
     def __init__(self, websocket_manager=None, use_tor=False):
@@ -79,7 +82,7 @@ class GoogleTrendsService:
             'User-Agent': self.browser_agents[self.current_browser_index]
         }
         
-        logger.info(f"GoogleTrendsService initialized (Tor: {use_tor}, Timezone: UTC-4, Region: Global)")
+        logger.info(f"GoogleTrendsService EXACT working implementation (Tor: {use_tor}, TZ: UTC-4, Geo: Global)")
     
     async def __aenter__(self):
         await self._create_session()
@@ -94,7 +97,7 @@ class GoogleTrendsService:
         old_browser = self.current_browser_index
         self.current_browser_index = (self.current_browser_index + 1) % len(self.browser_agents)
         self.headers['User-Agent'] = self.browser_agents[self.current_browser_index]
-        logger.info(f"Browser rotated: {old_browser + 1} → {self.current_browser_index + 1}")
+        logger.info(f"🔄 Browser rotated: {old_browser + 1} → {self.current_browser_index + 1}")
     
     async def _ensure_valid_session(self):
         """Enhanced session management"""
@@ -102,12 +105,12 @@ class GoogleTrendsService:
             not self.session or 
             self.session.closed or
             (self.session_created_at and 
-             (datetime.now(timezone.utc) - self.session_created_at).total_seconds() > self.session_max_age)
+             (datetime.utcnow() - self.session_created_at).total_seconds() > self.session_max_age)
         )
         
         if needs_renewal:
             if self.session:
-                logger.info("Renewing session")
+                logger.info("🔄 Renewing session")
                 await self.session.close()
                 self._rotate_browser()
             await self._create_session()
@@ -129,14 +132,14 @@ class GoogleTrendsService:
                 headers=self.headers
             )
             
-            self.session_created_at = datetime.now(timezone.utc)
+            self.session_created_at = datetime.utcnow()
             
-            # Get Google cookies for authentication
-            logger.info("Obtaining Google authentication cookies...")
+            # Get Google cookies using bulletproof method
+            logger.info("🍪 Getting Google cookies using bulletproof method...")
             await self._get_google_cookie()
             
         except Exception as e:
-            logger.error(f"Session creation failed: {e}")
+            logger.error(f"❌ Session creation failed: {e}")
             if self.use_tor and not self.tor_failed:
                 logger.warning("🧅 Tor might be causing issues - marking for fallback")
                 self.tor_failed = True
@@ -152,13 +155,13 @@ class GoogleTrendsService:
             # EXACT URL from your working code
             cookie_url = f'{self.base_url}/explore/?geo={self.hl[-2:]}'
             
-            logger.debug(f"Cookie URL: {cookie_url}")
+            logger.debug(f"🍪 Cookie URL: {cookie_url}")
             
             async with self.session.get(cookie_url) as response:
-                logger.debug(f"Cookie response: {response.status}")
+                logger.debug(f"🍪 Cookie response: {response.status}")
                 
                 if response.status != 200:
-                    logger.warning(f"Cookie request failed: HTTP {response.status}")
+                    logger.warning(f"⚠️ Cookie request failed: HTTP {response.status}")
                     return
                 
                 # Method 1: EXACT working code method
@@ -168,7 +171,7 @@ class GoogleTrendsService:
                         if hasattr(cookie, 'key') and hasattr(cookie, 'value'):
                             if cookie.key == 'NID':
                                 self.cookies = {cookie.key: cookie.value}
-                                logger.info(f"EXACT method SUCCESS - NID: {cookie.value[:20]}...")
+                                logger.info(f"✅ EXACT method SUCCESS - NID: {cookie.value[:20]}...")
                                 return
                             # Store any cookies we find
                             elif not self.cookies:
@@ -177,7 +180,7 @@ class GoogleTrendsService:
                             logger.debug(f"   Cookie object missing .key/.value: {type(cookie)}")
                     
                     if self.cookies:
-                        logger.info(f"EXACT method PARTIAL - {len(self.cookies)} cookies: {list(self.cookies.keys())}")
+                        logger.info(f"✅ EXACT method PARTIAL - {len(self.cookies)} cookies: {list(self.cookies.keys())}")
                         return
                     
                 except Exception as e:
@@ -189,7 +192,7 @@ class GoogleTrendsService:
                     cookies_dict = dict(response.cookies)
                     if cookies_dict:
                         self.cookies = cookies_dict
-                        logger.info(f"Dict method SUCCESS - {len(cookies_dict)} cookies: {list(cookies_dict.keys())}")
+                        logger.info(f"✅ Dict method SUCCESS - {len(cookies_dict)} cookies: {list(cookies_dict.keys())}")
                         return
                     
                 except Exception as e:
@@ -211,14 +214,14 @@ class GoogleTrendsService:
                         
                         if header_cookies:
                             self.cookies = header_cookies
-                            logger.info(f"Header method SUCCESS - {len(header_cookies)} cookies: {list(header_cookies.keys())}")
+                            logger.info(f"✅ Header method SUCCESS - {len(header_cookies)} cookies: {list(header_cookies.keys())}")
                             return
                     
                 except Exception as e:
                     logger.warning(f"   Header method failed: {e}")
                 
                 # If all methods failed
-                logger.error("ALL cookie methods failed!")
+                logger.error("❌ ALL cookie methods failed!")
                 logger.error("🔧 Possible causes:")
                 logger.error("   1. IP is rate limited/blocked by Google") 
                 logger.error("   2. aiohttp version incompatibility")
@@ -229,7 +232,7 @@ class GoogleTrendsService:
                 self.cookies = {}
                 
         except Exception as e:
-            logger.error(f"Cookie request completely failed: {e}")
+            logger.error(f"❌ Cookie request completely failed: {e}")
             self.cookies = {}
     
     async def build_payload(self, kw_list, cat=0, timeframe='today 5-y', geo='', gprop=''):
@@ -272,7 +275,7 @@ class GoogleTrendsService:
         """EXACT _get_tokens from your working ExactPyTrendsAPI"""
         await self._rate_limit()
         
-        logger.info("Requesting API tokens from Google Trends...")
+        logger.info("🔑 Getting tokens from explore endpoint...")
         
         try:
             # CRITICAL: Use POST method (not GET!) and pass as params
@@ -282,7 +285,7 @@ class GoogleTrendsService:
                 cookies=self.cookies
             ) as response:
                 
-                logger.info(f"Explore response status: {response.status}")
+                logger.info(f"🔑 Explore response status: {response.status}")
                 
                 if response.status == 200:
                     response_text = await response.text()
@@ -293,10 +296,10 @@ class GoogleTrendsService:
                     
                     if widget_dicts:
                         self._assign_widgets(widget_dicts)
-                        logger.info("API tokens obtained successfully")
+                        logger.info("✅ Successfully got tokens and assigned widgets")
                         return True
                     else:
-                        logger.error("Failed to parse widget data")
+                        logger.error("❌ Failed to parse widget data")
                         return False
                         
                 elif response.status == 429:
@@ -305,11 +308,11 @@ class GoogleTrendsService:
                     return False
                     
                 else:
-                    logger.error(f"Explore endpoint failed: {response.status}")
+                    logger.error(f"❌ Explore endpoint failed: {response.status}")
                     return False
                     
         except Exception as e:
-            logger.error(f"Explore request failed: {e}")
+            logger.error(f"❌ Explore request failed: {e}")
             return False
     
     def _parse_explore_response(self, response_text: str, trim_chars: int = 4):
@@ -320,17 +323,17 @@ class GoogleTrendsService:
             
             if 'widgets' in data:
                 widgets = data['widgets']
-                logger.debug(f"Found {len(widgets)} widgets")
+                logger.debug(f"✅ Found {len(widgets)} widgets")
                 return widgets
             else:
-                logger.warning("No 'widgets' key in response")
+                logger.warning("⚠️ No 'widgets' key in response")
                 return None
                 
         except json.JSONDecodeError as e:
-            logger.error(f"JSON parsing failed: {e}")
+            logger.error(f"❌ JSON parsing failed: {e}")
             return None
         except Exception as e:
-            logger.error(f"Response parsing failed: {e}")
+            logger.error(f"❌ Response parsing failed: {e}")
             return None
     
     def _assign_widgets(self, widget_dicts):
@@ -342,17 +345,17 @@ class GoogleTrendsService:
             
             if widget_id == 'TIMESERIES':
                 self.interest_over_time_widget = widget
-                logger.debug("Assigned TIMESERIES widget")
+                logger.debug("✅ Assigned TIMESERIES widget")
                 
             if widget_id == 'GEO_MAP' and first_region_token:
                 self.interest_by_region_widget = widget
                 first_region_token = False
-                logger.debug("Assigned GEO_MAP widget")
+                logger.debug("✅ Assigned GEO_MAP widget")
     
     async def interest_over_time(self):
         """EXACT interest_over_time from your working ExactPyTrendsAPI"""
         if not self.interest_over_time_widget:
-            logger.error("No interest_over_time_widget available. Call build_payload first.")
+            logger.error("❌ No interest_over_time_widget available. Call build_payload first.")
             return None
         
         await self._rate_limit()
@@ -364,7 +367,7 @@ class GoogleTrendsService:
             'tz': self.tz
         }
         
-        logger.debug("Getting interest over time data...")
+        logger.debug("📈 Getting interest over time data...")
         
         try:
             async with self.session.get(
@@ -373,7 +376,7 @@ class GoogleTrendsService:
                 cookies=self.cookies
             ) as response:
                 
-                logger.debug(f"Timeline response status: {response.status}")
+                logger.debug(f"📈 Timeline response status: {response.status}")
                 
                 if response.status == 200:
                     response_text = await response.text()
@@ -386,11 +389,11 @@ class GoogleTrendsService:
                     return None
                     
                 else:
-                    logger.error(f"Timeline endpoint failed: {response.status}")
+                    logger.error(f"❌ Timeline endpoint failed: {response.status}")
                     return None
                     
         except Exception as e:
-            logger.error(f"Timeline request failed: {e}")
+            logger.error(f"❌ Timeline request failed: {e}")
             return None
     
     def _parse_timeline_response(self, response_text: str, trim_chars: int = 5):
@@ -402,7 +405,7 @@ class GoogleTrendsService:
             # Extract timeline data like pytrends
             if 'default' in data and 'timelineData' in data['default']:
                 timeline_data = data['default']['timelineData']
-                logger.debug(f"Found {len(timeline_data)} timeline points")
+                logger.debug(f"✅ Found {len(timeline_data)} timeline points")
                 
                 # Extract latest value
                 if timeline_data:
@@ -424,7 +427,7 @@ class GoogleTrendsService:
                                     timestamp = self._parse_google_timestamp(entry['time'])
                                     timeline_timestamps.append(timestamp)
                                 else:
-                                    timeline_timestamps.append(datetime.now(timezone.utc))
+                                    timeline_timestamps.append(datetime.utcnow())
                         
                         return {
                             'success': True,
@@ -436,10 +439,10 @@ class GoogleTrendsService:
                             'average_score': sum(timeline_values) / len(timeline_values) if timeline_values else 0,
                             'max_score': max(timeline_values) if timeline_values else 0,
                             'source': 'exact_pytrends',
-                            'timestamp': datetime.now(timezone.utc).isoformat()
+                            'timestamp': datetime.utcnow().isoformat()
                         }
             
-            logger.warning("No timeline data found in expected format")
+            logger.warning("⚠️ No timeline data found in expected format")
             return {
                 'success': False,
                 'error': 'No timeline data found',
@@ -447,22 +450,22 @@ class GoogleTrendsService:
             }
             
         except json.JSONDecodeError as e:
-            logger.error(f"Timeline JSON parsing failed: {e}")
+            logger.error(f"❌ Timeline JSON parsing failed: {e}")
             return {'success': False, 'error': f'JSON parsing failed: {e}'}
         except Exception as e:
-            logger.error(f"Timeline parsing failed: {e}")
+            logger.error(f"❌ Timeline parsing failed: {e}")
             return {'success': False, 'error': f'Parsing failed: {e}'}
     
     def _parse_google_timestamp(self, timestamp_input) -> datetime:
-        """Parse Google timestamp and return timezone-aware UTC datetime"""
+        """Parse Google timestamp (no timezone adjustments)"""
         try:
             timestamp_float = float(timestamp_input)
-            # Create timezone-aware UTC datetime from timestamp
             dt = datetime.fromtimestamp(timestamp_float, tz=timezone.utc)
-            return dt
+            dt = dt - timedelta(hours=4)  # Subtract the 4-hour offset for NY Time
+            return dt.replace(tzinfo=None)
         except (ValueError, OSError, TypeError) as e:
-            logger.warning(f"Failed to parse timestamp {timestamp_input}: {e}")
-            return datetime.now(timezone.utc)
+            logger.warning(f"⚠️ Failed to parse timestamp {timestamp_input}: {e}")
+            return datetime.utcnow()
     
     async def _rate_limit(self):
         """EXACT rate limiting from your working code + hourly enhancement"""
@@ -483,7 +486,7 @@ class GoogleTrendsService:
         time_since_last = current_time - self.last_request_time
         if time_since_last < self.min_delay:
             sleep_time = self.min_delay - time_since_last
-            logger.info(f"Rate limiting: sleeping for {sleep_time:.1f} seconds")
+            logger.info(f"⏱️ Rate limiting: sleeping for {sleep_time:.1f} seconds")
             await asyncio.sleep(sleep_time)
         
         # Record request
@@ -505,12 +508,12 @@ class GoogleTrendsService:
             
             if result and result.get('success'):
                 self.failure_count = 0  # Reset on success
-                logger.info(f"Retrieved trend score for '{search_term}': {result['attention_score']:.1f}")
+                logger.info(f"✅ Trend score: {search_term} = {result['attention_score']:.1f}")
                 return result
             else:
                 self.failure_count += 1
                 error_msg = result.get('error', 'Failed to get timeline data') if result else 'No result'
-                logger.error(f"Failed to retrieve trend score for '{search_term}': {error_msg}")
+                logger.error(f"❌ Trend score failed: {search_term} - {error_msg}")
                 
                 # Enhanced: Browser rotation on failures
                 if self.failure_count % 2 == 0:
@@ -552,14 +555,14 @@ class GoogleTrendsService:
     async def update_target_data(self, target: AttentionTarget, db: Session) -> bool:
         """Enhanced target update using working API methods - FIXED: No metadata_json"""
         try:
-            logger.info(f"Updating trend data for {target.name}")
+            logger.info(f"🔄 Updating: {target.name}")
             
             # Use the proven working method
             data = await self.get_google_trends_data(target.search_term, timeframe="now 1-d")
             
             if not data.get('success'):
                 error_msg = data.get('error', 'Unknown error')
-                logger.error(f"Failed to get data for {target.name}: {error_msg}")
+                logger.error(f"❌ Failed to get data for {target.name}: {error_msg}")
                 return False
             
             # Update target
@@ -568,11 +571,11 @@ class GoogleTrendsService:
             change = new_score - old_score
             
             target.current_attention_score = Decimal(str(new_score))
-            target.last_updated = datetime.now(timezone.utc)
+            target.last_updated = datetime.utcnow()
             
             # Store historical data using Google's timestamp
             # Get the latest timestamp from the Google response or fall back to UTC
-            google_timestamp = datetime.now(timezone.utc)  # fallback
+            google_timestamp = datetime.utcnow()  # fallback
             if data.get('timeline_timestamps') and len(data['timeline_timestamps']) > 0:
                 # Use the most recent timestamp from Google's response
                 google_timestamp = data['timeline_timestamps'][-1]
@@ -588,7 +591,7 @@ class GoogleTrendsService:
             db.add(history_entry)
             
             # Cleanup old data
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+            cutoff = datetime.utcnow() - timedelta(hours=48)
             deleted = db.query(AttentionHistory).filter(
                 AttentionHistory.target_id == target.id,
                 AttentionHistory.data_source == "google_trends_realtime",
@@ -602,7 +605,7 @@ class GoogleTrendsService:
             tor_info = "🧅" if (self.use_tor and not self.tor_failed) else "🔗"
             cookie_info = f"[Cookies: {len(self.cookies)}]"
             
-            logger.info(f"{target.name}: {old_score:.1f} → {new_score:.1f} ({change:+.1f}) {tor_info} {browser_info} {cookie_info}")
+            logger.info(f"✅ {target.name}: {old_score:.1f} → {new_score:.1f} ({change:+.1f}) {tor_info} {browser_info} {cookie_info}")
             
             if deleted > 0:
                 logger.debug(f"🗑️ Cleaned {deleted} old points")
@@ -613,7 +616,7 @@ class GoogleTrendsService:
             return True
             
         except Exception as e:
-            logger.error(f"Update failed for {target.name}: {e}")
+            logger.error(f"❌ Update failed for {target.name}: {e}")
             db.rollback()
             return False
     
@@ -636,7 +639,7 @@ class GoogleTrendsService:
             logger.debug(f"📡 WebSocket sent for {target.name}")
             
         except Exception as e:
-            logger.error(f"WebSocket failed: {e}")
+            logger.error(f"❌ WebSocket failed: {e}")
     
     async def update_all_targets(self):
         """Enhanced update all with browser rotation"""
@@ -647,10 +650,10 @@ class GoogleTrendsService:
             ).all()
             
             if not targets:
-                logger.warning("No active targets")
+                logger.warning("⚠️ No active targets")
                 return True
             
-            logger.info(f"Starting update cycle for {len(targets)} targets")
+            logger.info(f"🔄 Updating {len(targets)} targets with browser rotation")
             
             updated = 0
             for i, target in enumerate(targets):
@@ -668,15 +671,15 @@ class GoogleTrendsService:
                         await asyncio.sleep(delay)
                         
                 except Exception as e:
-                    logger.error(f"Failed to update {target.name}: {e}")
+                    logger.error(f"❌ Failed to update {target.name}: {e}")
             
             success_rate = (updated / len(targets)) * 100
-            logger.info(f"Update cycle completed: {updated}/{len(targets)} targets successful ({success_rate:.1f}%)")
+            logger.info(f"✅ Updated {updated}/{len(targets)} targets ({success_rate:.1f}%)")
             
             return success_rate > 50  # Lower threshold while debugging
             
         except Exception as e:
-            logger.error(f"Update cycle failed: {e}")
+            logger.error(f"❌ Update cycle failed: {e}")
             return False
         finally:
             db.close()
@@ -687,28 +690,28 @@ async def run_background_updates(websocket_manager=None, use_tor=False):
     """Background worker using working implementation"""
     cycle = 0
     
-    logger.info(f"Starting background trend updates (Tor: {use_tor}, Timezone: UTC-4, Region: Global)")
+    logger.info(f"🚀 Background worker (Tor: {use_tor}, TZ: UTC-4, Geo: Global)")
     
     while True:
         try:
             cycle += 1
-            logger.info(f"Starting update cycle #{cycle}")
-
+            logger.info(f"🔄 Cycle #{cycle}")
+            
             async with GoogleTrendsService(websocket_manager=websocket_manager, use_tor=use_tor) as service:
                 success = await service.update_all_targets()
-
+            
             if success:
-                logger.info(f"Update cycle #{cycle} completed successfully")
+                logger.info(f"✅ Cycle #{cycle} completed")
                 await asyncio.sleep(900)  # 15 minutes
             else:
-                logger.error(f"Update cycle #{cycle} failed")
+                logger.error(f"❌ Cycle #{cycle} failed")
                 await asyncio.sleep(1800)  # 30 minutes on failure
             
         except KeyboardInterrupt:
-            logger.info("Background updates stopped by user")
+            logger.info("🛑 Stopped by user")
             break
         except Exception as e:
-            logger.error(f"Cycle #{cycle} exception: {e}")
+            logger.error(f"❌ Cycle #{cycle} exception: {e}")
             await asyncio.sleep(900)
 
 
@@ -726,25 +729,25 @@ if __name__ == "__main__":
     
     if len(sys.argv) > 1:
         if sys.argv[1] == "test-cookies":
-            # Test cookie extraction functionality
+            # Debug cookie extraction
             async def test_cookies():
-                logger.info("Testing cookie extraction...")
-
+                logger.info("🧪 Testing cookie extraction...")
+                
                 service = GoogleTrendsService(use_tor=use_tor)
                 await service._create_session()
-
-                logger.info(f"Cookies obtained: {len(service.cookies)}")
+                
+                logger.info(f"🍪 Cookies obtained: {len(service.cookies)}")
                 if service.cookies:
-                    logger.info(f"Cookie names: {list(service.cookies.keys())}")
-
+                    logger.info(f"🍪 Cookie names: {list(service.cookies.keys())}")
+                    
                     # Test API call
                     result = await service.get_google_trends_data("Bitcoin", "now 7-d")
                     if result.get('success'):
-                        logger.info(f"API test successful - Score: {result['attention_score']}")
+                        logger.info(f"✅ API test SUCCESS! Score: {result['attention_score']}")
                     else:
-                        logger.error(f"API test failed: {result.get('error')}")
+                        logger.error(f"❌ API test FAILED: {result.get('error')}")
                 else:
-                    logger.warning("No cookies obtained - may cause rate limiting")
+                    logger.error("❌ NO COOKIES - this will cause rate limiting")
                 
                 await service.session.close()
             
