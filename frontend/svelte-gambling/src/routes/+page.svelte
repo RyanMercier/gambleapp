@@ -188,8 +188,8 @@
       </div>
       <div class="w-px h-12 bg-white/20"></div>
       <div>
-        <div class="text-2xl font-bold text-cyan-400">$1000</div>
-        <div class="text-sm text-gray-400">Starting Balance</div>
+        <div class="text-2xl font-bold text-cyan-400">$10,000</div>
+        <div class="text-sm text-gray-400">Virtual Starting Balance</div>
       </div>
     </div>
 

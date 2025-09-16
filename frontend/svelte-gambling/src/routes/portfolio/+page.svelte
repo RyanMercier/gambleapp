@@ -666,19 +666,9 @@
                       <div class="flex gap-2">
                         <button
                           class="btn btn-primary btn-sm flex-1 transition-all duration-300 hover:scale-105"
-                          on:click={() => {
-                            selectedTournament = tournament;
-                            activeTab = 'positions';
-                          }}
+                          on:click={() => goto(`/tournaments/${tournament.tournament_id}`)}
                         >
-                          <span class="mr-1">📊</span> View Positions
-                        </button>
-                        <button
-                          class="btn btn-secondary btn-sm px-3 transition-all duration-300 hover:scale-105"
-                          on:click={() => goto(`/tournaments/${tournament.id}`)}
-                          title="Tournament Details"
-                        >
-                          <span>🔍</span>
+                          <span class="mr-1">🏆</span> View Leaderboard
                         </button>
                         <button
                           class="btn btn-outline btn-sm px-3 transition-all duration-300 hover:scale-105"

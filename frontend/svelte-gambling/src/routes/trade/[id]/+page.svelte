@@ -31,7 +31,7 @@
 
   $: targetId = $page.params.id;
   $: stakeCost = target ? tradeAmount * (target.current_attention_score || target.attention_score || 50) / 10 : 0;
-  $: tournamentBalance = selectedTournament ? (selectedTournament.current_balance || 10000) : 0;
+  $: tournamentBalance = selectedTournament ? (selectedTournament.current_balance || selectedTournament.starting_balance) : 0;
   $: canAffordLong = selectedTournament && stakeCost <= tournamentBalance;
   $: canAffordShort = selectedTournament && stakeCost <= tournamentBalance;
 

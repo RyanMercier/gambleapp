@@ -1334,13 +1334,22 @@ def get_tournament_balances(current_user: User = Depends(get_current_user), db: 
                 tournament_pnl = sum(float(trade.pnl or 0) for trade in tournament_trades)
                 current_balance = starting_balance + tournament_pnl
             
+            # Calculate P&L for this tournament
+            pnl = current_balance - starting_balance
+
             balances.append({
                 "tournament_id": tournament.id,
-                "tournament_name": tournament.name,
+                "name": tournament.name,  # Changed from tournament_name to name
+                "tournament_name": tournament.name,  # Keep both for compatibility
+                "duration": tournament.duration.value,
                 "starting_balance": starting_balance,
                 "current_balance": current_balance,
+                "pnl": pnl,
                 "entry_fee": float(entry.entry_fee),
-                "is_free": float(entry.entry_fee) == 0.0
+                "is_free": float(entry.entry_fee) == 0.0,
+                "start_date": tournament.start_date.isoformat() if tournament.start_date else None,
+                "end_date": tournament.end_date.isoformat() if tournament.end_date else None,
+                "rank": entry.rank if hasattr(entry, 'rank') and entry.rank else None
             })
         
         return {
@@ -1542,6 +1551,7 @@ def get_tournaments(db: Session = Depends(get_db)):
                     "target_type": tournament.target_type.value,
                     "duration": tournament.duration.value,
                     "entry_fee": float(tournament.entry_fee),
+                    "starting_balance": 10000.0,  # Standard starting balance for all tournaments
                     "current_participants": entry_count,
                     "prize_pool": float(tournament.prize_pool),
                     "start_date": tournament.start_date.isoformat(),
@@ -1605,7 +1615,7 @@ def join_tournament(
         user_id=current_user.id,
         tournament_id=tournament.id,
         entry_fee=tournament.entry_fee,
-        starting_balance=Decimal('1000.00')  # Everyone starts with same virtual balance
+        starting_balance=Decimal('10000.00')  # Everyone starts with same virtual balance
     )
     
     db.add(entry)
@@ -1622,6 +1632,133 @@ def join_tournament(
         "starting_balance": float(entry.starting_balance),
         "participants": tournament.participant_count
     }
+
+@app.get("/tournaments/{tournament_id}")
+def get_tournament_detail(tournament_id: int, db: Session = Depends(get_db)):
+    """
+    Get detailed information about a specific tournament.
+
+    Args:
+        tournament_id: ID of the tournament to retrieve
+        db: Database session
+
+    Returns:
+        Detailed tournament information including stats and metadata
+
+    Raises:
+        HTTPException: If tournament not found
+    """
+    tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
+
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+
+    try:
+        entry_count = db.query(TournamentEntry).filter(
+            TournamentEntry.tournament_id == tournament.id
+        ).count()
+
+        # Calculate status from dates with timezone handling
+        now = datetime.now(timezone.utc)
+
+        # Handle timezone-naive dates by assuming UTC
+        start_date = tournament.start_date
+        end_date = tournament.end_date
+
+        if start_date and start_date.tzinfo is None:
+            start_date = start_date.replace(tzinfo=timezone.utc)
+        if end_date and end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=timezone.utc)
+
+        if start_date and now < start_date:
+            status = "upcoming"
+        elif end_date and now > end_date:
+            status = "finished"
+        else:
+            status = "active"
+
+        return {
+            "id": tournament.id,
+            "name": tournament.name,
+            "target_type": tournament.target_type.value,
+            "duration": tournament.duration.value,
+            "entry_fee": float(tournament.entry_fee),
+            "starting_balance": 10000.0,
+            "current_participants": entry_count,
+            "prize_pool": float(tournament.prize_pool),
+            "start_date": tournament.start_date.isoformat(),
+            "end_date": tournament.end_date.isoformat(),
+            "status": status,
+            "created_at": tournament.created_at.isoformat(),
+            "max_participants": getattr(tournament, 'max_participants', None)
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting tournament detail: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get tournament details: {str(e)}")
+
+@app.get("/tournaments/{tournament_id}/leaderboard")
+def get_tournament_leaderboard(tournament_id: int, db: Session = Depends(get_db)):
+    """
+    Get the leaderboard for a specific tournament.
+
+    Args:
+        tournament_id: ID of the tournament
+        db: Database session
+
+    Returns:
+        Ranked list of tournament participants with their current standings
+
+    Raises:
+        HTTPException: If tournament not found
+    """
+    tournament = db.query(Tournament).filter(Tournament.id == tournament_id).first()
+
+    if not tournament:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+
+    try:
+        # Get all tournament entries with user information
+        entries = db.query(TournamentEntry, User).join(
+            User, TournamentEntry.user_id == User.id
+        ).filter(
+            TournamentEntry.tournament_id == tournament_id
+        ).all()
+
+        leaderboard = []
+        for entry, user in entries:
+            # Calculate current P&L: current_balance - starting_balance
+            current_balance = float(entry.current_balance)
+            starting_balance = float(entry.starting_balance)
+            current_pnl = current_balance - starting_balance
+
+            # Count trades for this user in this tournament
+            trades_count = db.query(Trade).filter(
+                Trade.user_id == user.id,
+                Trade.tournament_id == tournament_id
+            ).count()
+
+            leaderboard.append({
+                "user_id": user.id,
+                "username": user.username,
+                "current_balance": current_balance,
+                "pnl": current_pnl,
+                "trades_count": trades_count,
+                "entry_date": entry.created_at.isoformat() if entry.created_at else None
+            })
+
+        # Sort by current balance (highest first) and assign ranks
+        leaderboard.sort(key=lambda x: x["current_balance"], reverse=True)
+
+        for i, entry in enumerate(leaderboard):
+            entry["rank"] = i + 1
+
+        logger.info(f"Tournament leaderboard: Retrieved {len(leaderboard)} entries for tournament {tournament_id}")
+        return leaderboard
+
+    except Exception as e:
+        logger.error(f"Error getting tournament leaderboard: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get tournament leaderboard: {str(e)}")
 
 @app.get("/leaderboard")
 def get_leaderboard(db: Session = Depends(get_db)):

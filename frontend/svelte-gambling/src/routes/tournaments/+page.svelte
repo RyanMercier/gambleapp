@@ -171,49 +171,54 @@
               {#if activeTournaments.length > 0}
                 <div class="space-y-4">
                   {#each activeTournaments as tournament}
-                    <div class="p-4 bg-white/5 rounded-lg border border-white/10">
-                      <div class="flex items-start justify-between mb-3">
-                        <div class="flex items-center gap-3">
-                          <div class="text-2xl">{getDurationIcon(tournament.duration)}</div>
-                          <div>
-                            <h3 class="font-semibold">{tournament.name}</h3>
-                            <p class="text-sm text-gray-400 flex items-center gap-1">
-                              {getTypeIcon(tournament.target_type)} {tournament.target_type.charAt(0).toUpperCase() + tournament.target_type.slice(1)} Trading
-                            </p>
+                    <div class="p-4 bg-white/5 rounded-lg border border-white/10 hover:border-blue-500/50 transition-colors">
+                      <a href={`/tournaments/${tournament.id}`} class="block mb-4">
+                        <div class="flex items-start justify-between mb-3">
+                          <div class="flex items-center gap-3">
+                            <div class="text-2xl">{getDurationIcon(tournament.duration)}</div>
+                            <div>
+                              <h3 class="font-semibold">{tournament.name}</h3>
+                              <p class="text-sm text-gray-400 flex items-center gap-1">
+                                {getTypeIcon(tournament.target_type)} {tournament.target_type.charAt(0).toUpperCase() + tournament.target_type.slice(1)} Trading
+                              </p>
+                            </div>
+                          </div>
+                          <div class="text-right">
+                            <div class="text-lg font-bold text-emerald-400">{formatCurrency(tournament.prize_pool)}</div>
+                            <div class="text-xs text-gray-400">Prize Pool</div>
                           </div>
                         </div>
-                        <div class="text-right">
-                          <div class="text-lg font-bold text-emerald-400">{formatCurrency(tournament.prize_pool)}</div>
-                          <div class="text-xs text-gray-400">Prize Pool</div>
+
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                          <div>
+                            <span class="text-gray-400">Entry Fee:</span>
+                            <div class="font-medium">{formatCurrency(tournament.entry_fee)}</div>
+                          </div>
+                          <div>
+                            <span class="text-gray-400">Participants:</span>
+                            <div class="font-medium">{tournament.current_participants}</div>
+                          </div>
+                          <div>
+                            <span class="text-gray-400">Ends:</span>
+                            <div class="font-medium">{formatDate(tournament.end_date)}</div>
+                          </div>
+                          <div>
+                            <span class="text-gray-400">Time Left:</span>
+                            <div class="font-medium text-orange-400">{getTimeRemaining(tournament.end_date)}</div>
+                          </div>
                         </div>
-                      </div>
-                      
-                      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 text-sm">
-                        <div>
-                          <span class="text-gray-400">Entry Fee:</span>
-                          <div class="font-medium">{formatCurrency(tournament.entry_fee)}</div>
-                        </div>
-                        <div>
-                          <span class="text-gray-400">Participants:</span>
-                          <div class="font-medium">{tournament.current_participants}</div>
-                        </div>
-                        <div>
-                          <span class="text-gray-400">Ends:</span>
-                          <div class="font-medium">{formatDate(tournament.end_date)}</div>
-                        </div>
-                        <div>
-                          <span class="text-gray-400">Time Left:</span>
-                          <div class="font-medium text-orange-400">{getTimeRemaining(tournament.end_date)}</div>
-                        </div>
-                      </div>
-                      
-                      <button 
+                      </a>
+
+                      <button
                         class="btn btn-primary w-full"
-                        on:click={() => joinTournament(tournament.id)}
-                        disabled={$user.balance < tournament.entry_fee}
+                        on:click={(e) => {
+                          e.preventDefault();
+                          joinTournament(tournament.id);
+                        }}
+                        disabled={$user?.balance < tournament.entry_fee}
                       >
-                        {$user.balance >= tournament.entry_fee ? 
-                          `🏆 Join Tournament (${formatCurrency(tournament.entry_fee)})` : 
+                        {($user?.balance || 0) >= tournament.entry_fee ?
+                          `🏆 Join Tournament (${formatCurrency(tournament.entry_fee)})` :
                           'Insufficient Balance'}
                       </button>
                     </div>
@@ -230,7 +235,7 @@
               {#if endedTournaments.length > 0}
                 <div class="space-y-4">
                   {#each endedTournaments as tournament}
-                    <div class="p-4 bg-white/5 rounded-lg border border-white/10 opacity-75">
+                    <a href={`/tournaments/${tournament.id}`} class="block p-4 bg-white/5 rounded-lg border border-white/10 opacity-75 hover:opacity-100 hover:border-blue-500/50 transition-colors">
                       <div class="flex items-start justify-between mb-3">
                         <div class="flex items-center gap-3">
                           <div class="text-2xl">{getDurationIcon(tournament.duration)}</div>
@@ -246,11 +251,11 @@
                           <div class="text-xs text-gray-400">Final Prize Pool</div>
                         </div>
                       </div>
-                      
+
                       <div class="text-sm text-gray-500">
                         Ended: {formatDateTime(tournament.end_date)} • {tournament.current_participants} participants
                       </div>
-                    </div>
+                    </a>
                   {/each}
                 </div>
               {:else}

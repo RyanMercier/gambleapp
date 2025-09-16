@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { user } from '$lib/stores';
   import apiFetch from '$lib/api';
@@ -8,6 +8,7 @@
   let recentTrades = [];
   let tournamentBalances = [];
   let loading = true;
+  let countdownInterval;
 
   onMount(async () => {
     if (!$user) {
@@ -53,10 +54,22 @@
         activeTournaments: tournamentBalances.filter(t => !t.is_finished).length
       };
 
+      // Update countdowns every minute
+      countdownInterval = setInterval(() => {
+        // Force reactivity update by reassigning tournamentBalances
+        tournamentBalances = [...tournamentBalances];
+      }, 60000);
+
     } catch (error) {
       console.error('Failed to load profile data:', error);
     } finally {
       loading = false;
+    }
+  });
+
+  onDestroy(() => {
+    if (countdownInterval) {
+      clearInterval(countdownInterval);
     }
   });
 
@@ -74,6 +87,24 @@
 
   function formatPercent(value) {
     return `${(value || 0).toFixed(1)}%`;
+  }
+
+  function getTimeRemaining(endDate) {
+    if (!endDate) return "No end date";
+
+    const now = new Date();
+    const end = new Date(endDate);
+    const diff = end - now;
+
+    if (diff <= 0) return "Ended";
+
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+    if (days > 0) return `${days}d ${hours}h`;
+    if (hours > 0) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
   }
 
   function getTradeTypeIcon(tradeType) {
@@ -195,15 +226,15 @@
         </div>
 
         <div class="card text-center">
-          <div class="text-2xl font-bold text-emerald-400 mb-2">
-            +{formatCurrency(stats.bestTrade)}
+          <div class="text-2xl font-bold mb-2" class:text-green-400={stats.bestTrade > 0} class:text-red-400={stats.bestTrade < 0} class:text-gray-400={stats.bestTrade === 0}>
+            {stats.bestTrade >= 0 ? '+' : ''}{formatCurrency(stats.bestTrade)}
           </div>
           <div class="text-sm text-gray-400">Best Trade</div>
         </div>
 
         <div class="card text-center">
-          <div class="text-2xl font-bold text-red-400 mb-2">
-            {formatCurrency(stats.worstTrade)}
+          <div class="text-2xl font-bold mb-2" class:text-green-400={stats.worstTrade > 0} class:text-red-400={stats.worstTrade < 0} class:text-gray-400={stats.worstTrade === 0}>
+            {stats.worstTrade >= 0 ? '+' : ''}{formatCurrency(stats.worstTrade)}
           </div>
           <div class="text-sm text-gray-400">Worst Trade</div>
         </div>
@@ -244,6 +275,11 @@
                   <div class="flex-1 min-w-0">
                     <div class="font-medium truncate">{tournament.name}</div>
                     <div class="text-xs text-gray-400 capitalize">{tournament.duration}</div>
+                    {#if tournament.end_date}
+                      <div class="text-xs text-orange-400 font-medium">
+                        ⏰ {getTimeRemaining(tournament.end_date)}
+                      </div>
+                    {/if}
                   </div>
                 </div>
 
