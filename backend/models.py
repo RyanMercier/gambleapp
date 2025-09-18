@@ -52,11 +52,15 @@ class AttentionTarget(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     is_active = Column(Boolean, default=True)
     
-    # 5-year baseline metadata
+    # 5-year baseline metadata (legacy)
     baseline_period = Column(String(20), default="5_year")
     baseline_average = Column(Numeric(5, 2))
     baseline_max = Column(Numeric(5, 2))
     baseline_min = Column(Numeric(5, 2))
+
+    # 7-day normalization baseline (new system)
+    normalization_baseline = Column(Numeric(5, 2))  # 7-day average for score normalization
+    baseline_calculated_at = Column(DateTime)  # When normalization baseline was last calculated
     
     # Relationships
     history = relationship("AttentionHistory", back_populates="target")
@@ -70,8 +74,9 @@ class AttentionHistory(Base):
     target_id = Column(Integer, ForeignKey("attention_targets.id"), nullable=False)
     
     # ONLY attention score - no share price
-    attention_score = Column(Numeric(5, 2), nullable=False)
-    
+    attention_score = Column(Numeric(5, 2), nullable=False)  # Raw Google Trends score
+    normalized_score = Column(Numeric(5, 2))  # Score normalized to 7-day baseline for consistency
+
     # Additional context fields
     data_source = Column(String(50), default="google_trends")
     timeframe_used = Column(String(20), default="5_year")

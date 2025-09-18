@@ -255,11 +255,13 @@
     {/if}
 
     <!-- Main Content -->
-    <main class="{showNavigation ? 'pt-0' : 'pt-16'} min-h-screen {$user ? 'pr-[20%]' : ''}">
+    <main class="{showNavigation ? 'pt-0' : 'pt-16'} min-h-screen {$user && !isPublicRoute(currentRoute) ? 'pr-[20%]' : ''}">
       <slot />
     </main>
 
-    <!-- Global Chat Component -->
-    <GlobalChat />
+    <!-- Global Chat Component - only show when authenticated and not on public pages -->
+    {#if $user && !isPublicRoute(currentRoute)}
+      <GlobalChat />
+    {/if}
   </div>
 {/if}

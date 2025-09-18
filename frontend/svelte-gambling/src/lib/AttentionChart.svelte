@@ -8,6 +8,7 @@
   export let height = '400px';
   export let showTimeframeSelector = true;
   export let autoUpdate = true; // Enable real-time updates
+  export let showPositions = true; // Show position entry points
 
   let chartCanvas = null;
   let chart = null;
@@ -18,6 +19,8 @@
   let websocket = null;
   let lastUpdate = null;
   let isConnected = false;
+  let userTrades = [];
+  let userPositions = [];
 
   const timeframes = [
     { value: '1', label: '1D', description: '1 Day' },
@@ -63,8 +66,9 @@
     if (!targetId || websocket) return;
     
     try {
-      // const wsUrl = `ws://localhost:8000/ws/targets/${targetId}`;
-      const wsUrl = `ws://localhost:8000/ws/${targetId}`;
+      // Use environment variable for WebSocket URL
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8091';
+      const wsUrl = apiBaseUrl.replace('http', 'ws') + `/ws/${targetId}`;
       websocket = new WebSocket(wsUrl);
       
       websocket.onopen = () => {
@@ -157,35 +161,35 @@
     const labels = chartData.data.map(point => {
       const date = new Date(point.timestamp);
       
-      // Adjust label format based on sampling granularity
+      // Adjust label format based on sampling granularity - Display in user's local timezone
       const samplingInfo = chartData.sampling_info;
-      
+
       if (samplingInfo?.granularity?.includes('minutes') || selectedTimeframe <= 1) {
-        // For minute/hourly data, show time
-        return date.toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric', 
+        // For minute/hourly data, show time in user's timezone
+        return date.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
           hour: '2-digit',
           minute: '2-digit'
         });
       } else if (samplingInfo?.granularity?.includes('hour') || selectedTimeframe <= 7) {
-        // For hourly data, show date + hour
-        return date.toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric', 
-          hour: '2-digit' 
+        // For hourly data, show date + hour in user's timezone
+        return date.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit'
         });
       } else if (selectedTimeframe <= 365) {
-        // For daily/weekly data, show date only
-        return date.toLocaleDateString('en-US', { 
-          month: 'short', 
-          day: 'numeric' 
+        // For daily/weekly data, show date only in user's timezone
+        return date.toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric'
         });
       } else {
-        // For monthly/yearly data, show month/year
-        return date.toLocaleDateString('en-US', { 
-          year: 'numeric', 
-          month: 'short' 
+        // For monthly/yearly data, show month/year in user's timezone
+        return date.toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'short'
         });
       }
     });
@@ -227,19 +231,28 @@
     console.log(`Loading chart for targetId: ${targetId}, timeframe: ${selectedTimeframe} days`);
 
     try {
-      // Backend now handles intelligent sampling based on timeframe
-      chartData = await apiFetch(`/targets/${targetId}/chart?days=${selectedTimeframe}`);
-      
+      // Load chart data and user positions in parallel
+      const promises = [
+        apiFetch(`/targets/${targetId}/chart?days=${selectedTimeframe}`)
+      ];
+
+      if (showPositions) {
+        promises.push(loadUserTrades());
+      }
+
+      const [chartDataResponse] = await Promise.all(promises);
+      chartData = chartDataResponse;
+
       console.log('Chart data received:', chartData);
       console.log(`📊 Sampling info:`, chartData?.sampling_info);
-      
+
       // Verify we have data
       if (!chartData || !chartData.data || chartData.data.length === 0) {
         throw new Error('No chart data available');
       }
-      
+
       console.log(`✅ Loaded ${chartData.data.length} data points for ${chartData.target?.name} (${chartData.sampling_info?.granularity})`);
-      
+
       // Render chart immediately - canvas should be available
       renderChart(chartData);
     } catch (err) {
@@ -247,6 +260,24 @@
       console.error('Chart loading error for targetId', targetId, ':', err);
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadUserTrades() {
+    try {
+      const trades = await apiFetch('/trades/my');
+      // Filter trades for this specific target
+      userTrades = trades.trades.filter(trade => trade.target_id === targetId);
+
+      // Also get current portfolio positions for this target
+      const portfolio = await apiFetch('/portfolio');
+      userPositions = portfolio.positions.filter(position => position.target_id === targetId);
+
+      console.log(`📈 Loaded ${userTrades.length} trades and ${userPositions.length} positions for target ${targetId}`);
+    } catch (err) {
+      console.error('Failed to load user trades:', err);
+      userTrades = [];
+      userPositions = [];
     }
   }
 
@@ -282,29 +313,29 @@
         const date = new Date(point.timestamp);
         const samplingInfo = data.sampling_info;
         
-        // Dynamic label formatting based on granularity
+        // Dynamic label formatting based on granularity - Display in user's local timezone
         if (samplingInfo?.granularity?.includes('minutes') || selectedTimeframe <= 1) {
-          return date.toLocaleDateString('en-US', { 
-            month: 'short', 
-            day: 'numeric', 
+          return date.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
             hour: '2-digit',
             minute: '2-digit'
           });
         } else if (samplingInfo?.granularity?.includes('hour') || selectedTimeframe <= 7) {
-          return date.toLocaleDateString('en-US', { 
-            month: 'short', 
-            day: 'numeric', 
-            hour: '2-digit' 
+          return date.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit'
           });
         } else if (selectedTimeframe <= 365) {
-          return date.toLocaleDateString('en-US', { 
-            month: 'short', 
-            day: 'numeric' 
+          return date.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric'
           });
         } else {
-          return date.toLocaleDateString('en-US', { 
-            year: 'numeric', 
-            month: 'short' 
+          return date.toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short'
           });
         }
       });
@@ -319,26 +350,62 @@
       // Adjust point size based on number of points
       const pointRadius = data.data.length <= 50 ? 4 : data.data.length <= 100 ? 3 : 2;
 
+      // Prepare datasets
+      const datasets = [
+        {
+          label: 'Google Trends Score',
+          data: attentionData,
+          borderColor: 'rgb(59, 130, 246)',
+          backgroundColor: gradient,
+          borderWidth: 2,
+          tension: 0.4,
+          pointRadius: pointRadius,
+          pointHoverRadius: pointRadius + 2,
+          pointBackgroundColor: 'rgb(59, 130, 246)',
+          pointBorderColor: '#ffffff',
+          pointBorderWidth: 2,
+          fill: true,
+          yAxisID: 'y'
+        }
+      ];
+
+      // Add position entry points if showPositions is enabled and we have trades
+      if (showPositions && userTrades.length > 0) {
+        const positionEntries = getPositionEntryPoints(data.data, labels);
+        if (positionEntries.length > 0) {
+          datasets.push({
+            label: 'Long Entries',
+            data: positionEntries.filter(p => p.type === 'long').map(p => ({ x: p.label, y: p.score })),
+            borderColor: 'rgb(34, 197, 94)',
+            backgroundColor: 'rgb(34, 197, 94)',
+            borderWidth: 0,
+            pointRadius: 8,
+            pointHoverRadius: 10,
+            pointStyle: 'triangle',
+            showLine: false,
+            yAxisID: 'y'
+          });
+
+          datasets.push({
+            label: 'Short Entries',
+            data: positionEntries.filter(p => p.type === 'short').map(p => ({ x: p.label, y: p.score })),
+            borderColor: 'rgb(239, 68, 68)',
+            backgroundColor: 'rgb(239, 68, 68)',
+            borderWidth: 0,
+            pointRadius: 8,
+            pointHoverRadius: 10,
+            pointStyle: 'rectRot',
+            showLine: false,
+            yAxisID: 'y'
+          });
+        }
+      }
+
       chart = new Chart(ctx, {
         type: 'line',
         data: {
           labels: labels,
-          datasets: [
-            {
-              label: 'Google Trends Score',
-              data: attentionData,
-              borderColor: 'rgb(59, 130, 246)',
-              backgroundColor: gradient,
-              borderWidth: 2,
-              tension: 0.4,
-              pointRadius: pointRadius,
-              pointHoverRadius: pointRadius + 2,
-              pointBackgroundColor: 'rgb(59, 130, 246)',
-              pointBorderColor: '#ffffff',
-              pointBorderWidth: 2,
-              fill: true
-            }
-          ]
+          datasets: datasets
         },
         options: {
           responsive: true,
@@ -354,7 +421,46 @@
               }
             },
             legend: {
-              display: false
+              display: showPositions && userTrades.length > 0,
+              position: 'top',
+              labels: {
+                color: '#CBD5E1',
+                usePointStyle: true,
+                pointStyle: 'circle',
+                font: {
+                  size: 12
+                }
+              }
+            },
+            tooltip: {
+              backgroundColor: 'rgba(17, 24, 39, 0.9)',
+              titleColor: '#F8FAFC',
+              bodyColor: '#CBD5E1',
+              borderColor: '#374151',
+              borderWidth: 1,
+              callbacks: {
+                afterBody: function(context) {
+                  const datasetIndex = context[0].datasetIndex;
+                  const pointIndex = context[0].dataIndex;
+
+                  // Check if this is a position entry point
+                  if (datasetIndex > 0 && showPositions) {
+                    const positionEntries = getPositionEntryPoints(chartData.data, chart.data.labels);
+                    const entryType = datasetIndex === 1 ? 'long' : 'short';
+                    const entry = positionEntries.filter(p => p.type === entryType)[pointIndex];
+
+                    if (entry && entry.trade) {
+                      return [
+                        `Position: ${entry.type.toUpperCase()}`,
+                        `Entry Score: ${entry.score}%`,
+                        `Amount: $${entry.trade.stake_amount}`,
+                        `Date: ${new Date(entry.trade.timestamp).toLocaleString('en-US')}`
+                      ];
+                    }
+                  }
+                  return [];
+                }
+              }
             }
           },
           scales: {
@@ -407,11 +513,50 @@
   }
 
   function formatTime(date) {
-    return date?.toLocaleTimeString('en-US', { 
-      hour: '2-digit', 
+    return date?.toLocaleTimeString('en-US', {
+      hour: '2-digit',
       minute: '2-digit',
       second: '2-digit'
     });
+  }
+
+  function getPositionEntryPoints(chartData, labels) {
+    if (!userTrades || userTrades.length === 0) return [];
+
+    const positionEntries = [];
+
+    userTrades.forEach(trade => {
+      // Only show entry trades (buy/sell), not close trades
+      if (trade.trade_type === 'buy' || trade.trade_type === 'sell') {
+        const tradeTime = new Date(trade.timestamp);
+
+        // Find the closest data point in the chart to this trade time
+        let closestIndex = -1;
+        let closestTimeDiff = Infinity;
+
+        chartData.forEach((point, index) => {
+          const pointTime = new Date(point.timestamp);
+          const timeDiff = Math.abs(tradeTime.getTime() - pointTime.getTime());
+
+          if (timeDiff < closestTimeDiff) {
+            closestTimeDiff = timeDiff;
+            closestIndex = index;
+          }
+        });
+
+        // If we found a close enough point (within the chart timeframe)
+        if (closestIndex !== -1 && closestTimeDiff < 24 * 60 * 60 * 1000) { // Within 24 hours
+          positionEntries.push({
+            type: trade.trade_type === 'buy' ? 'long' : 'short',
+            label: labels[closestIndex],
+            score: parseFloat(trade.attention_score_at_entry),
+            trade: trade
+          });
+        }
+      }
+    });
+
+    return positionEntries;
   }
 </script>
 
@@ -454,22 +599,41 @@
           {/if}
         </div>
         
-        <!-- Timeframe Selector -->
-        <div class="flex bg-gray-800 rounded-lg p-1 shadow-inner">
-          {#each timeframes as timeframe}
+        <!-- Controls -->
+        <div class="flex items-center gap-3">
+          <!-- Position Toggle -->
+          {#if showPositions}
             <button
               class="px-3 py-2 text-sm rounded-md transition-all duration-200 font-medium {
-                selectedTimeframe === timeframe.value 
-                  ? 'bg-blue-600 text-white shadow-md transform scale-[1.02]' 
-                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                userTrades.length > 0
+                  ? 'bg-green-600 text-white shadow-md'
+                  : 'bg-gray-600 text-gray-400'
               }"
-              on:click={() => changeTimeframe(timeframe.value)}
+              on:click={() => { showPositions = !showPositions; loadChart(); }}
               disabled={loading}
-              title={timeframe.description}
+              title="Toggle position entry points"
             >
-              {timeframe.label}
+              📈 Positions ({userTrades.length})
             </button>
-          {/each}
+          {/if}
+
+          <!-- Timeframe Selector -->
+          <div class="flex bg-gray-800 rounded-lg p-1 shadow-inner">
+            {#each timeframes as timeframe}
+              <button
+                class="px-3 py-2 text-sm rounded-md transition-all duration-200 font-medium {
+                  selectedTimeframe === timeframe.value
+                    ? 'bg-blue-600 text-white shadow-md transform scale-[1.02]'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                }"
+                on:click={() => changeTimeframe(timeframe.value)}
+                disabled={loading}
+                title={timeframe.description}
+              >
+                {timeframe.label}
+              </button>
+            {/each}
+          </div>
         </div>
       </div>
       

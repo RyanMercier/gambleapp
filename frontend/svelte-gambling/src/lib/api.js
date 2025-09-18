@@ -1,4 +1,5 @@
-const API_BASE_URL = 'http://localhost:8000';
+// Use environment variable with fallback
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8091';
 
 // Global error handlers
 const errorHandlers = {
@@ -132,7 +133,7 @@ export async function validateSession() {
 
 export async function searchAttentionTarget(query, targetType = 'politician') {
   try {
-    return await apiFetch('/search', {
+    return await apiFetch('/api/search', {
       method: 'POST',
       body: JSON.stringify({
         query: query.trim(),

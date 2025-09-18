@@ -192,9 +192,18 @@ async def store_timeframe_data_with_real_timestamps(
                 if i < 3:
                     logger.debug(f"Sample timestamp {i}: {timestamp_dt} (tzinfo: {timestamp_dt.tzinfo})")
                 
+                # Calculate normalized score if baseline is available
+                normalized_score = None
+                if target.normalization_baseline:
+                    # Find peak score in current timeframe data for normalization
+                    timeframe_peak = max(trends_data['timeline']) if trends_data['timeline'] else 100
+                    normalization_factor = float(target.normalization_baseline) / timeframe_peak
+                    normalized_score = Decimal(str(round(value * normalization_factor, 2)))
+
                 entry = AttentionHistory(
                     target_id=target.id,
                     attention_score=Decimal(str(value)),
+                    normalized_score=normalized_score,
                     timestamp=timestamp_dt,
                     data_source=f"google_trends_{timeframe_name}",
                     timeframe_used=timeframe_code,

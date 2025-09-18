@@ -16,6 +16,10 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional
 
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
 # Third-party imports
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,6 +50,17 @@ from seed_data import store_timeframe_data_with_real_timestamps
 # Configuration
 USE_TOR = "--torify" in sys.argv or os.getenv('USE_TOR', 'false').lower() == 'true'
 
+# Environment configuration
+HOST = os.getenv('HOST', '0.0.0.0')
+PORT = int(os.getenv('PORT', '8091'))
+PUBLIC_IP = os.getenv('PUBLIC_IP', 'localhost')
+FRONTEND_PORT = os.getenv('FRONTEND_PORT', '5173')
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+
+# Parse CORS origins from environment
+CORS_ORIGINS_STR = os.getenv('CORS_ORIGINS', 'http://localhost:3000,http://localhost:5173')
+CORS_ORIGINS = [origin.strip() for origin in CORS_ORIGINS_STR.split(',')]
+
 
 app = FastAPI(
     title="TrendBet Attention Trading API",
@@ -53,16 +68,10 @@ app = FastAPI(
     description="A real-time attention trading platform using Google Trends data"
 )
 
-# CORS middleware configuration for development
+# CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-        "*"  # For development only - remove in production
-    ],
+    allow_origins=CORS_ORIGINS if ENVIRONMENT == 'production' else CORS_ORIGINS + ["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -325,13 +334,25 @@ async def get_autocomplete_suggestions(
         }
     
     suggestions = csv_loader.search_in_category(category, q, limit)
-    
+
+    # Normalize the response format to ensure 'name' field exists
+    normalized_suggestions = []
+    for item in suggestions:
+        normalized_item = dict(item)  # Copy the item
+        # Ensure 'name' field exists (use 'Name' if 'name' doesn't exist)
+        if 'name' not in normalized_item and 'Name' in normalized_item:
+            normalized_item['name'] = normalized_item['Name']
+        # Ensure 'search_term' exists
+        if 'search_term' not in normalized_item:
+            normalized_item['search_term'] = normalized_item.get('name', normalized_item.get('Name', ''))
+        normalized_suggestions.append(normalized_item)
+
     return {
         "success": True,
         "category": category,
         "query": q,
-        "suggestions": suggestions,
-        "total": len(suggestions)
+        "suggestions": normalized_suggestions,
+        "total": len(normalized_suggestions)
     }
 
 @app.get("/api/autocomplete")  
@@ -485,10 +506,11 @@ async def search_attention_target(
             detail=f"'{search.query}' not found in {search.target_type} list. Only pre-approved targets can be traded."
         )
     
-    # Find the best match
+    # Find the best match - handle both 'Name' and 'name' field formats
     best_match = None
     for match in csv_matches:
-        if match['name'].lower() == search.query.lower():
+        match_name = match.get('Name') or match.get('name', '')
+        if match_name.lower() == search.query.lower():
             best_match = match
             break
     
@@ -533,7 +555,7 @@ async def search_attention_target(
             }
             
             new_target = AttentionTarget(
-                name=best_match['name'],
+                name=best_match.get('Name') or best_match.get('name', ''),
                 type=type_map[csv_category],
                 search_term=best_match['search_term'],
                 current_attention_score=Decimal(str(trends_data['attention_score']))
@@ -543,21 +565,40 @@ async def search_attention_target(
             db.commit()
             db.refresh(new_target)
             
-            # Store initial history point with immediate 1-day data
+            # Store immediate 1-day and 7-day data for normalization baseline
             if trends_data.get('timeline') and trends_data.get('timeline_timestamps'):
                 try:
                     from seed_data import store_timeframe_data_with_real_timestamps
+                    # Store 1-day data first
                     await store_timeframe_data_with_real_timestamps(
                         new_target, trends_data, "1d", "now 1-d", db
                     )
-                    logger.info("Successfully stored initial 1-day data immediately")
+                    logger.info("✅ Stored initial 1-day data immediately")
+
+                    # Immediately fetch and store 7-day data for baseline calculation
+                    weekly_trends = await service.get_google_trends_data(
+                        best_match['search_term'],
+                        timeframe='now 7-d'
+                    )
+
+                    if weekly_trends and weekly_trends.get('timeline'):
+                        await store_timeframe_data_with_real_timestamps(
+                            new_target, weekly_trends, "7d", "now 7-d", db
+                        )
+                        logger.info("✅ Stored initial 7-day data for baseline calculation")
+
+                        # Calculate normalization baseline immediately
+                        logger.info(f"🧮 Starting baseline calculation for target {new_target.id}")
+                        await calculate_normalization_baseline(new_target.id, db)
+
                 except Exception as e:
-                    logger.warning(f"Failed to store initial 1d data: {e}")
+                    logger.warning(f"Failed to store initial timeframe data: {e}")
             else:
                 # Store single point if no timeline data
                 history = AttentionHistory(
                     target_id=new_target.id,
                     attention_score=new_target.current_attention_score,
+                    normalized_score=new_target.current_attention_score,  # Default to raw score
                     data_source="google_trends",
                     timeframe_used="now 1-d"
                 )
@@ -592,6 +633,138 @@ async def search_attention_target(
         logger.error(f"Error creating target from CSV match: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create target: {str(e)}")
+
+async def calculate_normalization_baseline(target_id: int, db: SessionLocal):
+    """Calculate 7-day baseline for score normalization and apply to all existing data"""
+    try:
+        # Get all 7-day data points for this target
+        seven_day_data = db.query(AttentionHistory).filter(
+            AttentionHistory.target_id == target_id,
+            AttentionHistory.timeframe_used.in_(["now 7-d", "7d"])
+        ).order_by(AttentionHistory.timestamp).all()
+
+        logger.info(f"🔍 Found {len(seven_day_data)} 7-day data points for target {target_id}")
+
+        if not seven_day_data:
+            logger.warning(f"No 7-day data found for target {target_id} - cannot calculate baseline")
+            return
+
+        # Calculate baseline as average of 7-day scores
+        total_score = sum(float(point.attention_score) for point in seven_day_data)
+        baseline = total_score / len(seven_day_data)
+
+        # Update target with new baseline
+        target = db.query(AttentionTarget).filter(AttentionTarget.id == target_id).first()
+        if target:
+            target.normalization_baseline = Decimal(str(round(baseline, 2)))
+            target.baseline_calculated_at = datetime.now(timezone.utc)
+            db.commit()
+
+            logger.info(f"📊 Calculated normalization baseline for {target.name}: {baseline:.2f} (from {len(seven_day_data)} 7-day points)")
+
+            # Apply normalization to all existing data points
+            await apply_normalization_to_existing_data(target_id, baseline, db)
+
+    except Exception as e:
+        logger.error(f"Failed to calculate normalization baseline for target {target_id}: {e}")
+        db.rollback()
+
+async def apply_normalization_to_existing_data(target_id: int, baseline: float, db: SessionLocal):
+    """Apply normalization to all existing attention history data"""
+    try:
+        # Get all data points for this target
+        all_data = db.query(AttentionHistory).filter(
+            AttentionHistory.target_id == target_id
+        ).all()
+
+        # Group by timeframe to normalize each group
+        timeframe_groups = {}
+        for point in all_data:
+            tf = point.timeframe_used
+            if tf not in timeframe_groups:
+                timeframe_groups[tf] = []
+            timeframe_groups[tf].append(point)
+
+        # Normalize each timeframe group
+        for timeframe, points in timeframe_groups.items():
+            if not points:
+                continue
+
+            # Find the peak (max) score in this timeframe for normalization
+            timeframe_peak = max(float(point.attention_score) for point in points)
+
+            # Apply normalization formula: normalized = raw * (baseline / timeframe_peak)
+            normalization_factor = baseline / timeframe_peak if timeframe_peak > 0 else 1
+
+            for point in points:
+                raw_score = float(point.attention_score)
+                normalized = raw_score * normalization_factor
+                point.normalized_score = Decimal(str(round(normalized, 2)))
+
+            logger.info(f"📈 Normalized {len(points)} points for timeframe {timeframe} (peak: {timeframe_peak:.1f}, factor: {normalization_factor:.3f})")
+
+        db.commit()
+        logger.info(f"✅ Applied normalization to {len(all_data)} total data points for target {target_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to apply normalization for target {target_id}: {e}")
+        db.rollback()
+
+async def recalculate_all_baselines():
+    """Monthly re-normalization: recalculate baselines for all targets"""
+    logger.info("🔄 Starting monthly baseline recalculation for all targets...")
+
+    db = SessionLocal()
+    try:
+        # Get all active targets
+        targets = db.query(AttentionTarget).filter(AttentionTarget.is_active == True).all()
+
+        recalculated_count = 0
+        for target in targets:
+            try:
+                # Check if baseline is older than 30 days or doesn't exist
+                needs_recalc = (
+                    not target.baseline_calculated_at or
+                    (datetime.now(timezone.utc) - target.baseline_calculated_at).days >= 30
+                )
+
+                if needs_recalc:
+                    logger.info(f"🎯 Recalculating baseline for {target.name} (last calc: {target.baseline_calculated_at})")
+                    await calculate_normalization_baseline(target.id, db)
+                    recalculated_count += 1
+
+                    # Small delay to avoid overwhelming the system
+                    await asyncio.sleep(1)
+
+            except Exception as e:
+                logger.error(f"Failed to recalculate baseline for target {target.id}: {e}")
+                continue
+
+        logger.info(f"✅ Monthly baseline recalculation complete: {recalculated_count}/{len(targets)} targets updated")
+
+    except Exception as e:
+        logger.error(f"Failed during monthly baseline recalculation: {e}")
+    finally:
+        db.close()
+
+@app.post("/admin/recalculate-baselines")
+async def manual_baseline_recalculation():
+    """Admin endpoint to manually trigger baseline recalculation"""
+    await recalculate_all_baselines()
+    return {"message": "Baseline recalculation started"}
+
+# Start monthly baseline recalculation task
+async def start_monthly_baseline_task():
+    """Start the monthly baseline recalculation background task"""
+    while True:
+        try:
+            # Wait 30 days (30 * 24 * 60 * 60 seconds)
+            await asyncio.sleep(30 * 24 * 60 * 60)
+            await recalculate_all_baselines()
+        except Exception as e:
+            logger.error(f"Error in monthly baseline task: {e}")
+            # Wait 1 hour before retrying
+            await asyncio.sleep(3600)
 
 async def gradual_historical_seeding(target_id: int, search_term: str, start_delay_minutes: int = 2):
     """Gradual background seeding to avoid rate limits - spread over 30+ minutes"""
@@ -831,10 +1004,18 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
     if not all_data:
         logger.warning(f"No historical data found for target {target_id}. Creating synthetic data point.")
         
-        # Create a single data point with current score
+        # Create a single data point with current score (normalized if baseline available)
+        current_score = float(target.current_attention_score)
+        if target.normalization_baseline:
+            # Apply normalization to current score (assuming it's from "now 1-d" timeframe)
+            normalized_current = current_score * (float(target.normalization_baseline) / 100.0)
+            display_score = normalized_current
+        else:
+            display_score = current_score
+
         synthetic_data_point = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "attention_score": float(target.current_attention_score),
+            "attention_score": display_score,
             "data_source": "current_score_synthetic"
         }
         
@@ -860,11 +1041,11 @@ def get_target_chart_data(target_id: int, days: int = 30, db: Session = Depends(
             "message": "Historical data is being loaded in the background. Chart will update automatically when ready."
         }
     
-    # Convert to response format
+    # Convert to response format - return normalized scores for consistent UX
     data_points = [
         {
-            "timestamp": point.timestamp.isoformat(),
-            "attention_score": float(point.attention_score),
+            "timestamp": point.timestamp.isoformat() if point.timestamp.tzinfo else point.timestamp.replace(tzinfo=timezone.utc).isoformat(),
+            "attention_score": float(point.normalized_score) if point.normalized_score else float(point.attention_score),  # Use normalized score
             "data_source": point.data_source
         }
         for point in all_data
@@ -1527,7 +1708,7 @@ def get_my_trades(current_user: User = Depends(get_current_user), db: Session = 
                 "position_type": getattr(trade, 'position_type', 'long'),
                 "stake_amount": float(trade.stake_amount),
                 "attention_score_at_entry": float(trade.attention_score_at_entry),
-                "timestamp": trade.timestamp.isoformat(),
+                "timestamp": trade.timestamp.isoformat() if trade.timestamp.tzinfo else trade.timestamp.replace(tzinfo=timezone.utc).isoformat(),
                 "outcome": outcome,  # Calculated instead of accessing nonexistent field
                 "pnl": pnl_value,
                 "is_closed": trade.is_closed
@@ -1976,7 +2157,7 @@ async def get_chat_messages(
                 "id": msg.id,
                 "username": msg.user.username,
                 "content": msg.content,
-                "timestamp": msg.timestamp.isoformat(),
+                "timestamp": msg.timestamp.isoformat() if msg.timestamp.tzinfo else msg.timestamp.replace(tzinfo=timezone.utc).isoformat(),
                 "user_id": msg.user_id
             }
             for msg in messages
@@ -2007,7 +2188,7 @@ async def send_chat_message(
             "id": new_message.id,
             "username": current_user.username,
             "content": new_message.content,
-            "timestamp": new_message.timestamp.isoformat(),
+            "timestamp": new_message.timestamp.isoformat() if new_message.timestamp.tzinfo else new_message.timestamp.replace(tzinfo=timezone.utc).isoformat(),
             "user_id": current_user.id
         }
     }
@@ -2028,3 +2209,10 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect_chat(websocket)
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background tasks when the application starts"""
+    # Start monthly baseline recalculation task
+    asyncio.create_task(start_monthly_baseline_task())
+    logger.info("🚀 Started monthly baseline recalculation background task")

@@ -34,7 +34,7 @@ class GoogleTrendsService:
         # EXACT configuration from your working ExactPyTrendsAPI
         self.session = None
         self.hl = 'en-US'
-        self.tz = 240  # East Coast timezone (UTC-4) as requested
+        self.tz = 0  # Use UTC timezone to avoid timestamp confusion
         self.geo = ''   # Global geo as requested
         self.cookies = {}
         
@@ -79,7 +79,7 @@ class GoogleTrendsService:
             'User-Agent': self.browser_agents[self.current_browser_index]
         }
         
-        logger.info(f"GoogleTrendsService initialized (Tor: {use_tor}, Timezone: UTC-4, Region: Global)")
+        logger.info(f"GoogleTrendsService initialized (Tor: {use_tor}, Timezone: UTC, Region: Global)")
     
     async def __aenter__(self):
         await self._create_session()
@@ -457,9 +457,11 @@ class GoogleTrendsService:
         """Parse Google timestamp and return timezone-aware UTC datetime"""
         try:
             timestamp_float = float(timestamp_input)
-            # Create timezone-aware UTC datetime from timestamp
+            # Google provides Unix timestamps - convert to UTC datetime
+            # Note: Google's timestamps are in UTC, but need to account for timezone offset
             dt = datetime.fromtimestamp(timestamp_float, tz=timezone.utc)
             return dt
+            
         except (ValueError, OSError, TypeError) as e:
             logger.warning(f"Failed to parse timestamp {timestamp_input}: {e}")
             return datetime.now(timezone.utc)
@@ -543,7 +545,7 @@ class GoogleTrendsService:
                 'via_tor': self.use_tor and not self.tor_failed,
                 'browser_agent': self.current_browser_index + 1,
                 'geo': 'global',
-                'timezone': 'UTC-4 (East Coast)',
+                'timezone': 'UTC (Coordinated Universal Time)',
                 'cookies_available': len(self.cookies) > 0
             })
         
@@ -608,7 +610,7 @@ class GoogleTrendsService:
                 logger.debug(f"🗑️ Cleaned {deleted} old points")
             
             # WebSocket notification
-            await self._notify_clients(target, new_score, change, current_utc)
+            await self._notify_clients(target, new_score, change, google_timestamp)
             
             return True
             

@@ -65,18 +65,31 @@ class CSVDataLoader:
         
         # First pass: exact matches and starts with
         for item in data:
-            name_lower = item['name'].lower()
+            # Handle both 'Name' and 'name' column formats
+            name = item.get('Name') or item.get('name', '')
+            if not name:
+                continue
+            name_lower = name.lower()
             if name_lower == query_lower or name_lower.startswith(query_lower):
+                # Ensure we have the search_term field for API compatibility
+                if 'search_term' not in item:
+                    item['search_term'] = name
                 matches.append(item)
                 if len(matches) >= limit:
                     break
-        
+
         # Second pass: contains query (if we need more results)
         if len(matches) < limit:
             for item in data:
                 if item not in matches:  # Avoid duplicates
-                    name_lower = item['name'].lower()
+                    name = item.get('Name') or item.get('name', '')
+                    if not name:
+                        continue
+                    name_lower = name.lower()
                     if query_lower in name_lower:
+                        # Ensure we have the search_term field for API compatibility
+                        if 'search_term' not in item:
+                            item['search_term'] = name
                         matches.append(item)
                         if len(matches) >= limit:
                             break
